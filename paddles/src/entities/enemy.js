@@ -99,25 +99,27 @@ class Enemy {
       }
     }
 
-    // パドルとの被弾判定（重なっているすべての生存パドルがダメージを受ける）
-    const hitX = this.x;
-    const hitY = this.bullet_type === 'self_destruction' ? this.y + this.currentRadius * 0.75 : this.y;
-    let hitAny = false;
-    for (const p of paddleList) {
-      if (!p || p.hp <= 0) continue;
-      const pLeft = p.x - p.currentWidth / 2;
-      const pRight = p.x + p.currentWidth / 2;
-      const pTop = p.y - p.height / 2;
-      const pBottom = p.y + p.height / 2;
+    // self_destruction の敵のみ、敵自体がパドルへの被弾判定を持ち、触れると消滅する
+    if (this.bullet_type === 'self_destruction') {
+      const hitX = this.x;
+      const hitY = this.y + this.currentRadius * 0.75;
+      let hitAny = false;
+      for (const p of paddleList) {
+        if (!p || p.hp <= 0 || p.invincibleTimer > 0) continue;
+        const pLeft = p.x - p.currentWidth / 2;
+        const pRight = p.x + p.currentWidth / 2;
+        const pTop = p.y - p.height / 2;
+        const pBottom = p.y + p.height / 2;
 
-      if (hitX >= pLeft && hitX <= pRight && hitY >= pTop && hitY <= pBottom) {
-        onDamagePaddle(p, this.damage);
-        hitAny = true;
+        if (hitX >= pLeft && hitX <= pRight && hitY >= pTop && hitY <= pBottom) {
+          onDamagePaddle(p, this.damage);
+          hitAny = true;
+        }
       }
-    }
-    if (hitAny) {
-      effectsManager.spawnCircleParticles(this.x, this.y, COLORS.red, 10, 40, 150);
-      return false; // 消滅
+      if (hitAny) {
+        effectsManager.spawnCircleParticles(this.x, this.y, COLORS.red, 10, 40, 150);
+        return false; // 消滅
+      }
     }
 
     if (this.y - this.currentRadius > HEIGHT + 20) {
@@ -152,24 +154,32 @@ class Enemy {
       }
     } else if (this.bullet_type === 'aimed') {
       const alivePaddles = paddleList.filter((p) => p && p.hp > 0);
-      let targetX = WIDTH / 2;
-      if (alivePaddles.length > 0) {
-        let best = alivePaddles[0];
-        let bestDist = Math.abs(best.x - this.x);
-        for (let i = 1; i < alivePaddles.length; i++) {
-          const d = Math.abs(alivePaddles[i].x - this.x);
-          if (d < bestDist) {
-            bestDist = d;
-            best = alivePaddles[i];
-          }
+      if (alivePaddles.length === 0) return;
+
+      let best = alivePaddles[0];
+      let bestDist = Math.abs(best.x - this.x);
+      for (let i = 1; i < alivePaddles.length; i++) {
+        const d = Math.abs(alivePaddles[i].x - this.x);
+        if (d < bestDist) {
+          bestDist = d;
+          best = alivePaddles[i];
         }
-        targetX = best.x;
       }
-      const targetY = PADDLE.Y;
-      const a = Math.atan2(targetY - this.y, targetX - this.x);
+
+      const spawnY = this.y + this.currentRadius * 0.8;
+      const dx = best.x - this.x;
+      const dy = PADDLE.Y - spawnY;
+
+      // パドルより下（反対側＝上向き）に向かう場合や、真下からの角度がつきすぎている場合（> 60°）は射撃しない
+      const maxAimOffsetFromDown = Math.PI / 3;
+      if (dy <= 0 || Math.abs(Math.atan2(dx, dy)) > maxAimOffsetFromDown) {
+        return;
+      }
+
+      const a = Math.atan2(dy, dx);
       enemyBullets.push({
         x: this.x,
-        y: this.y + this.currentRadius * 0.8,
+        y: spawnY,
         vx: Math.cos(a) * 230,
         vy: Math.sin(a) * 230,
         damage: this.damage,

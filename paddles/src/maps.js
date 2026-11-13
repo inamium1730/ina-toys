@@ -116,16 +116,24 @@ const MAPS = [
   },
   {
     identifier: 9,
-    name: 'spider',
+    name: 'crab',
     map: [
       '##  #   #  ##',
-      '  #########  ',
+      '  # ##### #  ',
       '#############',
-      '  #########  ',
+      '  # ##### #  ',
       '##  #   #  ##'
     ],
     enemies: ['triangle', 'pentagon', 'diamond', 'hexagon'],
     spawn_interval: 10,
     spawn_limit: 10
+  },
+  {
+    identifier: 10,
+    name: 'bigfoot',
+    map: 'boss',
+    enemies: ['triangle', 'pentagon', 'diamond', 'hexagon'],
+    spawn_interval: null,
+    spawn_limit: 5
   }
 ];

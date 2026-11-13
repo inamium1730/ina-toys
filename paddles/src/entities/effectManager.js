@@ -120,14 +120,18 @@ class EffectManager {
     }
   }
 
-  spawnPaddleShatterSection(xCenter, yCenter, width, height, originPaddleX, emit = true) {
+  spawnPaddleShatterSection(xCenter, yCenter, width, height, originPaddleX, emit = true, targetPaddle = null) {
     if (width <= 0) return;
+    const target = targetPaddle && targetPaddle.hp > 0 ? targetPaddle : null;
     this.damageTrails.push({
       x: xCenter,
       y: yCenter,
       w: width,
       h: height,
       originPaddleX,
+      target,
+      offsetX: target ? xCenter - target.x : xCenter - originPaddleX,
+      offsetY: target ? yCenter - target.y : 0,
       timer: 0,
       holdDuration: 0.22
     });
@@ -137,8 +141,17 @@ class EffectManager {
         y: Math.round(yCenter * 10) / 10,
         w: Math.round(width * 10) / 10,
         h: height,
-        originPaddleX: Math.round(originPaddleX * 10) / 10
+        originPaddleX: Math.round(originPaddleX * 10) / 10,
+        slot: target && target.slot !== undefined ? target.slot : null
       });
+    }
+  }
+
+  syncDamageTrailPosition(trail) {
+    if (trail.target && trail.target.hp > 0) {
+      trail.x = trail.target.x + trail.offsetX;
+      trail.y = trail.target.y + trail.offsetY;
+      trail.originPaddleX = trail.target.x;
     }
   }
 
@@ -202,6 +215,7 @@ class EffectManager {
 
     for (let i = this.damageTrails.length - 1; i >= 0; i--) {
       const tr = this.damageTrails[i];
+      this.syncDamageTrailPosition(tr);
       tr.timer += dt;
       if (tr.timer >= tr.holdDuration) {
         this.shatterTrailIntoTriangles(tr);
@@ -270,6 +284,37 @@ class EffectManager {
         ShapeRenderer.drawItemShape(ctx, pls.subType, px, py, pls.radius * scale, pAngle, pls.color, alpha);
       } else if (pls.kind === 'enemy') {
         ShapeRenderer.drawEnemyShape(ctx, pls.subType, px, py, pls.radius * scale, pAngle, pls.color, alpha);
+      } else if (pls.kind === 'boss_head') {
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = pls.color;
+        const cosA = Math.cos(pAngle);
+        const sinA = Math.sin(pAngle);
+        const halfBase = (pls.w || 126) * scale;
+        const len = (pls.h || 260) * scale;
+        const centerDist = 110;
+        const cx = px - sinA * centerDist;
+        const cy = py - cosA * centerDist;
+        const tipDist = centerDist * scale;
+        const backDist = (len - centerDist) * scale;
+
+        const tipX = cx + sinA * tipDist;
+        const tipY = cy + cosA * tipDist;
+        const baseCenterX = cx - sinA * backDist;
+        const baseCenterY = cy - cosA * backDist;
+
+        const tlX = baseCenterX - cosA * halfBase;
+        const tlY = baseCenterY + sinA * halfBase;
+        const trX = baseCenterX + cosA * halfBase;
+        const trY = baseCenterY - sinA * halfBase;
+
+        ctx.beginPath();
+        ctx.moveTo(tlX, tlY);
+        ctx.lineTo(trX, trY);
+        ctx.lineTo(tipX, tipY);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
       }
     }
   }
@@ -277,6 +322,7 @@ class EffectManager {
   renderDamageEffects(ctx) {
     ctx.save();
     for (const tr of this.damageTrails) {
+      this.syncDamageTrailPosition(tr);
       ctx.fillStyle = GAME_CONFIG.COLORS.red;
       ctx.globalAlpha = 0.88;
       ctx.fillRect(tr.x - tr.w / 2, tr.y - tr.h / 2, tr.w, tr.h);

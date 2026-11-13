@@ -24,6 +24,7 @@ class Paddle {
     this.regenParticleTimer = 0;
     this.effectClock = 0;
     this.pulseTimer = 0;
+    this.invincibleTimer = 0;
     this.contestedItemsCount = options.contestedItemsCount || 0;
     this.effects = {
       cyan: 0,
@@ -63,6 +64,10 @@ class Paddle {
 
   update(dt, input, effectsManager) {
     if (this.hp <= 0) return;
+
+    if (this.invincibleTimer > 0) {
+      this.invincibleTimer = Math.max(0, this.invincibleTimer - dt);
+    }
 
     const { WIDTH, PADDLE, ITEM } = GAME_CONFIG;
     this.moveHorizontal(dt, input);
@@ -124,6 +129,7 @@ class Paddle {
     this.currentWidth = this.hp * PADDLE.WIDTH_PER_HP;
     this.timeSinceLastDamage = 0;
     this.regenParticleTimer = 0;
+    this.invincibleTimer = 3.0;
     const halfW = this.currentWidth / 2;
     this.x = ColorUtils.clamp(this.x, halfW, WIDTH - halfW);
 
@@ -143,7 +149,7 @@ class Paddle {
   }
 
   takeDamage(damageAmount, effectsManager) {
-    if (this.hp <= 0) return false;
+    if (this.hp <= 0 || this.invincibleTimer > 0) return false;
 
     const { PADDLE, COLORS } = GAME_CONFIG;
     const oldHp = this.hp;
@@ -160,8 +166,8 @@ class Paddle {
       if (sideLost > 0.5) {
         const leftCenter = this.x - this.currentWidth / 2 - sideLost / 2;
         const rightCenter = this.x + this.currentWidth / 2 + sideLost / 2;
-        effectsManager.spawnPaddleShatterSection(leftCenter, this.y, sideLost, this.height, this.x);
-        effectsManager.spawnPaddleShatterSection(rightCenter, this.y, sideLost, this.height, this.x);
+        effectsManager.spawnPaddleShatterSection(leftCenter, this.y, sideLost, this.height, this.x, true, this);
+        effectsManager.spawnPaddleShatterSection(rightCenter, this.y, sideLost, this.height, this.x, true, this);
       }
     }
 
@@ -174,12 +180,19 @@ class Paddle {
 
   render(ctx, showMultiplayerTags = false, localTagMorph = 1) {
     if (this.hp <= 0 || this.currentWidth <= 0) return;
+    const isBlinkDimmed =
+      this.invincibleTimer > 0 &&
+      Math.floor(Math.max(0, 3.0 - this.invincibleTimer) / 0.25) % 2 === 1;
+    ctx.save();
     ctx.save();
     ctx.fillStyle = ColorUtils.getStarEffectColor(this.effects, this.effectClock);
-    if (showMultiplayerTags && !this.isLocal) {
-      ctx.globalAlpha = 0.75;
+    let paddleAlpha = (showMultiplayerTags && !this.isLocal) ? 0.75 : 1.0;
+    if (isBlinkDimmed) {
+      paddleAlpha *= 0.75;
     }
+    ctx.globalAlpha = paddleAlpha;
     ctx.fillRect(this.x - this.currentWidth / 2, this.y - this.height / 2, this.currentWidth, this.height);
+    ctx.restore();
 
     if (showMultiplayerTags) {
       const t = ColorUtils.clamp(localTagMorph, 0, 1);

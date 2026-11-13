@@ -43,11 +43,14 @@
     warpSpeedMultiplier: 1,
     damageFlash: 0,
     enemySpawnTimer: 0,
+    bossSupplyTimer: 30,
     paddles: [],
     purplePaddle: null,
     balls: [],
     blocks: [],
+    supplyDrops: [],
     enemies: [],
+    boss: null,
     enemyBullets: [],
     items: [],
     transition: null,
@@ -65,6 +68,8 @@
   let guestWarpingFlag = false;
   let menuVisualPaddles = [];
   let gameInProgressHintTimer = 0;
+  let debugStartStageIndex = 0;
+  let nextSupplyDropId = 0;
 
   // ============================================================================
   // ニックネーム・WebRTCマルチプレイ管理初期化
@@ -174,13 +179,24 @@
         if (game.remoteTransitionSnap) {
           const [phase, timer, pendingIds] = game.remoteTransitionSnap;
           const stageData = MAPS[game.stageIndex % MAPS.length];
-          const fullStage = buildStageBlocks(stageData, false);
-          const pendingSet = new Set(pendingIds || []);
-          game.transition = {
-            phase,
-            timer: timer || 0,
-            pendingBlocks: fullStage.filter((b) => pendingSet.has(b.id))
-          };
+          if (phase === 'boss_siren' || phase === 'boss_intro') {
+            if (phase === 'boss_intro' && !game.boss) {
+              game.boss = new BigfootBoss(stageData);
+            }
+            game.transition = {
+              phase,
+              timer: timer || 0,
+              pendingBlocks: []
+            };
+          } else {
+            const fullStage = buildStageBlocks(stageData, false);
+            const pendingSet = new Set(pendingIds || []);
+            game.transition = {
+              phase,
+              timer: timer || 0,
+              pendingBlocks: fullStage.filter((b) => pendingSet.has(b.id))
+            };
+          }
           game.remoteTransitionSnap = null;
         }
         hostSnapSendTimer = 1;
@@ -448,7 +464,12 @@
     return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
   }
 
+  function isBossStage(stageData) {
+    return Boolean(stageData && (stageData.map === 'boss' || stageData.name === 'bigfoot'));
+  }
+
   function buildStageBlocks(stageData, spawnedImmediately = true) {
+    if (!stageData || !Array.isArray(stageData.map)) return [];
     const list = [];
     let nextId = 0;
     for (let r = 0; r < BLOCKS.ROWS; r++) {
@@ -541,11 +562,14 @@
     game.warpSpeedMultiplier = 1;
     game.damageFlash = 0;
     game.enemySpawnTimer = 0;
+    game.bossSupplyTimer = 30;
     game.paddles = [];
     game.purplePaddle = null;
     game.balls = [];
     game.blocks = [];
+    game.supplyDrops = [];
     game.enemies = [];
+    game.boss = null;
     game.enemyBullets = [];
     game.items = [];
     game.transition = null;
@@ -720,18 +744,19 @@
     }
     game.score = 0;
     game.displayedScore = 0;
-    game.stageIndex = 0;
-    game.stageNumber = 1;
+    const startIdx = ColorUtils.clamp(debugStartStageIndex, 0, Math.max(0, MAPS.length - 1));
+    game.stageIndex = startIdx;
+    game.stageNumber = startIdx + 1;
     game.menuTitleAlpha = 1;
     game.tagTransition = 0;
     game.endScreenPlayerNames = [];
     game.remoteTransitionSnap = null;
-    loadStage(0);
+    loadStage(startIdx);
 
     if (mp.mode === 'host') {
       mp.broadcastCtrl({
         type: 'start_game',
-        stageIndex: 0,
+        stageIndex: startIdx,
         players: mp.serializePlayers()
       });
       broadcastStageBlockLayout();
@@ -777,14 +802,25 @@
     effectsManager.reset();
     backgroundEffect.reset();
     game.enemySpawnTimer = stageData.spawn_interval ? stageData.spawn_interval * 0.65 : 0;
+    game.bossSupplyTimer = 30;
 
-    // ステージ開始時もブロックが1つずつEaseOutBackでポップアップして登場する
+    // ステージ開始時もブロックが1つずつEaseOutBackでポップアップして登場する（ボスマップではサイレン演出から開始）
     game.blocks = [];
-    game.transition = {
-      phase: 'spawning_blocks',
-      timer: 0,
-      pendingBlocks: buildStageBlocks(stageData, false)
-    };
+    game.supplyDrops = [];
+    game.boss = null;
+    if (isBossStage(stageData)) {
+      game.transition = {
+        phase: 'boss_siren',
+        timer: 0,
+        pendingBlocks: []
+      };
+    } else {
+      game.transition = {
+        phase: 'spawning_blocks',
+        timer: 0,
+        pendingBlocks: buildStageBlocks(stageData, false)
+      };
+    }
   }
 
   function startNextStageTransition() {
@@ -846,10 +882,42 @@
         reviveDeadPaddles();
         const nextStageData = MAPS[game.stageIndex % MAPS.length];
         game.blocks = [];
-        tr.pendingBlocks = buildStageBlocks(nextStageData, false);
-        tr.phase = 'spawning_blocks';
-        tr.timer = 0;
+        game.supplyDrops = [];
+        game.boss = null;
+        game.bossSupplyTimer = 30;
+        if (isBossStage(nextStageData)) {
+          tr.pendingBlocks = [];
+          tr.phase = 'boss_siren';
+          tr.timer = 0;
+        } else {
+          tr.pendingBlocks = buildStageBlocks(nextStageData, false);
+          tr.phase = 'spawning_blocks';
+          tr.timer = 0;
+        }
         broadcastStageBlockLayout();
+      }
+    } else if (tr.phase === 'boss_siren') {
+      tr.timer += dt;
+      if (tr.timer >= 2.4) {
+        const nextStageData = MAPS[game.stageIndex % MAPS.length];
+        game.boss = new BigfootBoss(nextStageData);
+        game.boss.setIntroProgress(0);
+        tr.phase = 'boss_intro';
+        tr.timer = 0;
+      }
+    } else if (tr.phase === 'boss_intro') {
+      tr.timer += dt;
+      const introDuration = 1.0;
+      const u = ColorUtils.clamp(tr.timer / introDuration, 0, 1);
+      if (!game.boss) {
+        const nextStageData = MAPS[game.stageIndex % MAPS.length];
+        game.boss = new BigfootBoss(nextStageData);
+      }
+      game.boss.setIntroProgress(u);
+      if (tr.timer >= introDuration) {
+        game.boss.setIntroProgress(1);
+        game.bossSupplyTimer = 30;
+        game.transition = null;
       }
     } else if (tr.phase === 'spawning_blocks') {
       tr.timer += dt;
@@ -913,7 +981,9 @@
       } else if (mp.mode === 'host') {
         mp.broadcastCtrl({ type: 'paddle_hit', slot: targetPaddle.slot });
       }
+      return true;
     }
+    return false;
   }
 
   function spawnEnemyForStage(stageData) {
@@ -1063,7 +1133,8 @@
         r2(p.effects.green),
         p.nickname,
         p.contestedItemsCount || 0,
-        r2(p.timeSinceLastDamage || 0)
+        r2(p.timeSinceLastDamage || 0),
+        r2(p.invincibleTimer || 0)
       ]),
       pp: game.purplePaddle
         ? [r1(game.purplePaddle.x), r1(game.purplePaddle.width), game.purplePaddle.bounces]
@@ -1096,6 +1167,8 @@
       ]),
       eb: game.enemyBullets.map((b) => [r1(b.x), r1(b.y), r2(b.timer || 0), r1(b.vx || 0), r1(b.vy || 0), b.damage || 1]),
       it: game.items.map((it) => [it.id, it.type, r1(it.x), r1(it.y), r2(it.angle), it.color]),
+      sd: game.supplyDrops.map((d) => [d.id, r1(d.x), r1(d.y), d.w]),
+      bo: game.boss ? game.boss.serialize() : null,
       tr: game.transition
         ? [game.transition.phase, r2(game.transition.timer || 0), (game.transition.pendingBlocks || []).map((b) => b.id)]
         : null
@@ -1118,6 +1191,13 @@
     }
     if (targetKind === 'purple') {
       return game.purplePaddle;
+    }
+    if (targetKind === 'boss_head') {
+      return game.boss ? game.boss.head : null;
+    }
+    if (targetKind === 'boss_circle' && game.boss) {
+      const allCircles = game.boss.leftArm.circles.concat(game.boss.rightArm.circles);
+      return allCircles.find((c) => c.id === targetId) || null;
     }
     return null;
   }
@@ -1143,9 +1223,11 @@
       game.transition = null;
       game.balls = [];
       game.enemies = [];
+      game.boss = null;
       game.enemyBullets = [];
       game.items = [];
       game.blocks = [];
+      game.supplyDrops = [];
       game.blocksStageIndex = -1;
       game.purplePaddle = null;
       input.pointerX = null;
@@ -1205,7 +1287,10 @@
     } else if (msg.type === 'fx_regen') {
       effectsManager.spawnRegenParticles(msg.x, msg.y, msg.w, msg.h, false);
     } else if (msg.type === 'fx_shatter') {
-      effectsManager.spawnPaddleShatterSection(msg.x, msg.y, msg.w, msg.h, msg.originPaddleX, false);
+      const targetPaddle = (msg.slot !== undefined && msg.slot !== null)
+        ? resolvePulseTarget('paddle', msg.slot)
+        : null;
+      effectsManager.spawnPaddleShatterSection(msg.x, msg.y, msg.w, msg.h, msg.originPaddleX, false, targetPaddle);
     } else if (msg.type === 'end_game') {
       game.endScreenPlayerNames = Array.isArray(msg.playerNames) && msg.playerNames.length > 0
         ? msg.playerNames.slice()
@@ -1245,7 +1330,7 @@
     const nextPaddles = [];
     const totalCount = Math.max(1, snap.ps.length);
     for (const row of snap.ps) {
-      const [slot, x, hp, maxHp, cw, clk, cyan, yellow, green, nick, contestedCnt, regenTime] = row;
+      const [slot, x, hp, maxHp, cw, clk, cyan, yellow, green, nick, contestedCnt, regenTime, invTimer] = row;
       let p = game.paddles.find((item) => item.slot === slot);
       if (!p) {
         p = new Paddle({
@@ -1275,6 +1360,7 @@
       p.nickname = nick;
       if (contestedCnt !== undefined) p.contestedItemsCount = contestedCnt;
       if (regenTime !== undefined) p.timeSinceLastDamage = regenTime;
+      if (invTimer !== undefined) p.invincibleTimer = invTimer;
       nextPaddles.push(p);
     }
     game.paddles = nextPaddles;
@@ -1383,6 +1469,21 @@
     }));
     game.remoteTransitionSnap = snap.tr || null;
 
+    // ボス同期
+    if (snap.bo) {
+      if (!game.boss) {
+        const stageData = MAPS[snap.si % MAPS.length];
+        game.boss = new BigfootBoss(stageData);
+      }
+      game.boss.applySnapshot(snap.bo);
+      if (game.boss.phase === 'summon') {
+        game.shakeTimer = Math.max(game.shakeTimer, 0.08);
+        game.shakeMagnitude = Math.max(game.shakeMagnitude, 4.2);
+      }
+    } else {
+      game.boss = null;
+    }
+
     // アイテム同期
     const nextItems = [];
     for (const row of snap.it) {
@@ -1398,6 +1499,11 @@
       nextItems.push(it);
     }
     game.items = nextItems;
+
+    // サプライドロップ同期
+    game.supplyDrops = Array.isArray(snap.sd)
+      ? snap.sd.map(([id, x, y, size]) => ({ id, x, y, w: size, h: size, vy: 58, alive: true }))
+      : [];
   }
 
   function updateGuest(dt) {
@@ -1415,6 +1521,9 @@
       // ローカル予測 & 補間による滑らかな表示
       for (const p of game.paddles) {
         if (p.hp <= 0) continue;
+        if (p.invincibleTimer > 0) {
+          p.invincibleTimer = Math.max(0, p.invincibleTimer - dt);
+        }
         if (p.isLocal) {
           p.moveHorizontal(dt, input);
           if (typeof p.targetServerX === 'number') {
@@ -1538,6 +1647,49 @@
       }
     }
 
+    // 3b. ボス更新＆サプライドロップ管理 (30秒ごとに正方形白色ブロックを画面上から落下)
+    if (game.boss) {
+      game.boss.update(dt, {
+        paddles: game.paddles,
+        enemies: game.enemies,
+        enemyBullets: game.enemyBullets,
+        effectsManager,
+        onDamagePaddle: damagePaddle,
+        onScreenShake: (dur, mag) => {
+          game.shakeTimer = Math.max(game.shakeTimer, dur);
+          game.shakeMagnitude = Math.max(game.shakeMagnitude, mag);
+        }
+      });
+
+      if (!game.transition && isBossStage(stageData) && !game.boss.isDefeated()) {
+        game.bossSupplyTimer -= dt;
+        if (game.bossSupplyTimer <= 0) {
+          game.bossSupplyTimer += 30;
+          const size = 30;
+          const margin = 64;
+          const spawnX = margin + Math.random() * (WIDTH - margin * 2);
+          nextSupplyDropId += 1;
+          game.supplyDrops.push({
+            id: nextSupplyDropId,
+            x: spawnX,
+            y: -size / 2 - 4,
+            w: size,
+            h: size,
+            vy: 58,
+            alive: true
+          });
+        }
+      }
+    }
+
+    for (let i = game.supplyDrops.length - 1; i >= 0; i--) {
+      const drop = game.supplyDrops[i];
+      drop.y += drop.vy * dt;
+      if (!drop.alive || drop.y - drop.h / 2 > HEIGHT + 20) {
+        game.supplyDrops.splice(i, 1);
+      }
+    }
+
     // 4. 敵弾更新（ヒット判定は1px、パドルは見た目通り。重なり時は双方にダメージ）
     for (let i = game.enemyBullets.length - 1; i >= 0; i--) {
       const b = game.enemyBullets[i];
@@ -1547,7 +1699,7 @@
 
       let hitAny = false;
       for (const p of game.paddles) {
-        if (!p || p.hp <= 0) continue;
+        if (!p || p.hp <= 0 || p.invincibleTimer > 0) continue;
         const pLeft = p.x - p.currentWidth / 2;
         const pRight = p.x + p.currentWidth / 2;
         const pTop = p.y - p.height / 2;
@@ -1582,7 +1734,9 @@
       paddles: game.paddles,
       purplePaddle: () => game.purplePaddle,
       blocks: game.blocks,
+      supplyDrops: game.supplyDrops,
       enemies: game.enemies,
+      boss: game.boss,
       effectsManager,
       onScore: (pts) => {
         game.score += pts;
@@ -1631,6 +1785,21 @@
     // 7. ステージクリア＆シームレス移行演出
     if (game.transition) {
       updateStageTransition(dt);
+    } else if (isBossStage(stageData)) {
+      if (game.boss && game.boss.isDefeated()) {
+        while (game.enemies.length > 0) {
+          const enemy = game.enemies.pop();
+          forceDestroyEnemy(enemy);
+        }
+        game.enemyBullets = [];
+        game.supplyDrops = [];
+        game.score += 500;
+        if (game.stageIndex + 1 < MAPS.length) {
+          startNextStageTransition();
+        } else {
+          endGame('victory');
+        }
+      }
     } else {
       const hasRemainingBlocks = game.blocks.some((b) => b.alive);
       if (!hasRemainingBlocks) {
@@ -1684,6 +1853,15 @@
       renderDamageGlow(game.damageFlash);
     }
 
+    const sirenTimer = (game.transition && game.transition.phase === 'boss_siren')
+      ? game.transition.timer
+      : (mp.mode === 'guest' && game.remoteTransitionSnap && game.remoteTransitionSnap[0] === 'boss_siren'
+        ? game.remoteTransitionSnap[1]
+        : -1);
+    if (sirenTimer >= 0) {
+      renderBossSiren(sirenTimer);
+    }
+
     ctx.restore();
   }
 
@@ -1725,7 +1903,7 @@
     // 1. パルスアニメーション
     effectsManager.renderPulses(ctx);
 
-    // 2. ブロック (スケールイン対応)
+    // 2. ブロック＆サプライドロップ (スケールイン対応)
     ctx.save();
     ctx.fillStyle = COLORS.white;
     for (const blk of game.blocks) {
@@ -1736,6 +1914,10 @@
       const h = blk.h * scale;
       ctx.fillRect(blk.x - w / 2, blk.y - h / 2, w, h);
     }
+    for (const drop of game.supplyDrops) {
+      if (!drop.alive) continue;
+      ctx.fillRect(drop.x - drop.w / 2, drop.y - drop.h / 2, drop.w, drop.h);
+    }
     ctx.restore();
 
     // 3. アイテム
@@ -1743,9 +1925,12 @@
       it.render(ctx);
     }
 
-    // 4. エネミー
+    // 4. エネミー＆ボス
     for (const e of game.enemies) {
       e.render(ctx);
+    }
+    if (game.boss) {
+      game.boss.render(ctx);
     }
 
     // 5. 敵弾 (中をくり抜いた丸形、0.5秒サイクルで赤→白点滅、イージングなし・当たり判定1px)
@@ -1995,6 +2180,83 @@
     ctx.strokeRect(0, 0, WIDTH, HEIGHT);
     ctx.restore();
   }
+
+  function renderBossSiren(timer) {
+    const cycle = 0.8;
+    const phase = (timer % cycle) / cycle;
+    const pulse = Math.pow(Math.sin(phase * Math.PI), 2);
+    if (pulse <= 0.005) return;
+
+    ctx.save();
+    ctx.globalAlpha = 0.22 * pulse;
+    ctx.fillStyle = COLORS.red;
+    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+    ctx.restore();
+  }
+
+  // ============================================================================
+  // デバッグ用マップ切替コンソールコマンド
+  // ============================================================================
+  function resolveMapIndex(target) {
+    if (typeof target === 'string') {
+      const trimmed = target.trim();
+      const byName = MAPS.findIndex((m) => m.name && m.name.toLowerCase() === trimmed.toLowerCase());
+      if (byName !== -1) return byName;
+      if (/^\d+$/.test(trimmed)) {
+        const num = Number(trimmed);
+        const byId = MAPS.findIndex((m) => m.identifier === num);
+        if (byId !== -1) return byId;
+      }
+    } else if (typeof target === 'number' && Number.isFinite(target)) {
+      const byId = MAPS.findIndex((m) => m.identifier === target);
+      if (byId !== -1) return byId;
+      if (target === 0 && MAPS.length > 0) return 0;
+    }
+    return -1;
+  }
+
+  window.setStartMap = (target) => {
+    const idx = resolveMapIndex(target);
+    if (idx === -1) {
+      const available = MAPS.map((m) => `${m.identifier}:${m.name}`).join(', ');
+      console.warn(`[Paddles] Unknown map "${target}". Available: ${available}`);
+      return null;
+    }
+    debugStartStageIndex = idx;
+    const chosen = MAPS[idx];
+    console.info(`[Paddles] Start map set to #${chosen.identifier} (${chosen.name})`);
+    return chosen;
+  };
+
+  window.jumpToMap = (target) => {
+    const idx = resolveMapIndex(target);
+    if (idx === -1) {
+      return window.setStartMap(target);
+    }
+    debugStartStageIndex = idx;
+    const chosen = MAPS[idx];
+    if (game.state === 'playing' && mp.isHostOrSolo()) {
+      loadStage(idx);
+      if (mp.mode === 'host') {
+        broadcastStageBlockLayout();
+        sendHostSnapshot(true);
+      }
+      console.info(`[Paddles] Jumped to map #${chosen.identifier} (${chosen.name})`);
+    } else {
+      console.info(`[Paddles] Start map set to #${chosen.identifier} (${chosen.name})`);
+    }
+    return chosen;
+  };
+
+  window.listMaps = () => {
+    const list = MAPS.map((m, i) => ({ index: i, id: m.identifier, name: m.name }));
+    if (typeof console.table === 'function') {
+      console.table(list);
+    } else {
+      console.log(list);
+    }
+    return list;
+  };
 
   // ============================================================================
   // 起動＆メインループ開始

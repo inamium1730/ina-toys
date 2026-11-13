@@ -80,7 +80,7 @@ class Ball {
 
   update(dt, context) {
     const { WIDTH, HEIGHT, PADDLE, BALL, ITEM, COLORS } = GAME_CONFIG;
-    const { paddle, paddles, purplePaddle, blocks, enemies, effectsManager, onScore, onSpawnItem, onClearPurplePaddle } = context;
+    const { paddle, paddles, purplePaddle, blocks, supplyDrops = [], enemies, boss, effectsManager, onScore, onSpawnItem, onClearPurplePaddle } = context;
     const paddleList = Array.isArray(paddles) ? paddles : (paddle ? [paddle] : []);
 
     const hadYellow = this.effects.yellow > 0;
@@ -238,7 +238,7 @@ class Ball {
           this.spawningFromCenter = false;
           const avgAngle = Math.atan2(sumSin, sumCos);
           const finalAngle = this.effects.cyan > 0
-            ? this.computeCyanAimAssistAngle(avgAngle, blocks, enemies)
+            ? this.computeCyanAimAssistAngle(avgAngle, blocks, enemies, boss, supplyDrops)
             : avgAngle;
           this.applyPaddleBounceVelocity(finalAngle);
         }
@@ -262,7 +262,7 @@ class Ball {
           const offset = ColorUtils.clamp((this.x - pp.x) / ppHalfW, -0.8, 0.8);
           const bounceAngle = -Math.PI / 2 + offset * (Math.PI * 0.32);
           const finalAngle = this.effects.cyan > 0
-            ? this.computeCyanAimAssistAngle(bounceAngle, blocks, enemies)
+            ? this.computeCyanAimAssistAngle(bounceAngle, blocks, enemies, boss, supplyDrops)
             : bounceAngle;
           this.applyPaddleBounceVelocity(finalAngle);
 
@@ -275,17 +275,7 @@ class Ball {
       // ブロックとの衝突 (スケールイン演出が完了し当たり判定が追加されたブロックのみ)
       for (const blk of blocks) {
         if (!blk.alive || !blk.collidable) continue;
-        const bLeft = blk.x - blk.w / 2;
-        const bRight = blk.x + blk.w / 2;
-        const bTop = blk.y - blk.h / 2;
-        const bBottom = blk.y + blk.h / 2;
-
-        const closestX = ColorUtils.clamp(this.x, bLeft, bRight);
-        const closestY = ColorUtils.clamp(this.y, bTop, bBottom);
-        const dx = this.x - closestX;
-        const dy = this.y - closestY;
-
-        if (dx * dx + dy * dy <= this.radius * this.radius) {
+        if (this.rectOverlapsCircle(blk.x, blk.y, blk.w, blk.h, this.x, this.y, this.radius)) {
           blk.alive = false;
           onScore(100);
           effectsManager.spawnCircleParticles(blk.x, blk.y, COLORS.white, 7, 35, 130);
@@ -293,23 +283,35 @@ class Ball {
 
           // 水色ボールはブロックに当たっても反射せず貫通する
           if (this.effects.cyan <= 0) {
-            const overlapX = (blk.w / 2 + this.radius) - Math.abs(this.x - blk.x);
-            const overlapY = (blk.h / 2 + this.radius) - Math.abs(this.y - blk.y);
-            if (overlapX < overlapY) {
-              this.vx = -this.vx;
-            } else {
-              const prevVy = this.vy;
-              this.vy = -this.vy;
-              if (this.effects.yellow > 0) {
-                if (this.vy < 0) {
-                  const speedMult = this.effects.green > 0 ? BALL.GREEN_SPEED_MULTIPLIER : 1.0;
-                  const minUpVy = Math.sqrt(2 * BALL.YELLOW_GRAVITY * Math.max(120, this.y + 60)) * speedMult;
-                  this.vy = -Math.max(Math.abs(this.vy), minUpVy);
-                } else if (this.effects.green > 0 && prevVy < 0) {
-                  this.vy /= BALL.GREEN_SPEED_MULTIPLIER;
-                }
-              }
-            }
+            this.bounceOffRect(blk.x, blk.y, blk.w, blk.h);
+            break;
+          }
+        }
+      }
+
+      // ボス戦サプライドロップブロックとの衝突 (破壊でスコア＆確定アイテム出現)
+      for (let dIdx = supplyDrops.length - 1; dIdx >= 0; dIdx--) {
+        const drop = supplyDrops[dIdx];
+        if (!drop.alive) continue;
+        if (this.rectOverlapsCircle(drop.x, drop.y, drop.w, drop.h, this.x, this.y, this.radius)) {
+          drop.alive = false;
+          onScore(100);
+          effectsManager.spawnPulse({
+            kind: 'rect',
+            x: drop.x,
+            y: drop.y,
+            w: drop.w,
+            h: drop.h,
+            color: COLORS.white,
+            duration: 0.42,
+            maxScale: 2.2
+          });
+          effectsManager.spawnCircleParticles(drop.x, drop.y, COLORS.white, 8, 35, 130);
+          onSpawnItem(drop.x, drop.y, 1.0);
+          supplyDrops.splice(dIdx, 1);
+
+          if (this.effects.cyan <= 0) {
+            this.bounceOffRect(drop.x, drop.y, drop.w, drop.h);
             break;
           }
         }
@@ -349,9 +351,43 @@ class Ball {
           break;
         }
       }
+
+      // ボスとの衝突
+      if (boss && !boss.isDefeated()) {
+        boss.handleBallCollision(this, effectsManager, onScore, onSpawnItem);
+      }
     }
 
     return this.y - this.radius <= HEIGHT + 16;
+  }
+
+  rectOverlapsCircle(rx, ry, rw, rh, cx, cy, cr) {
+    const closestX = ColorUtils.clamp(cx, rx - rw / 2, rx + rw / 2);
+    const closestY = ColorUtils.clamp(cy, ry - rh / 2, ry + rh / 2);
+    const dx = cx - closestX;
+    const dy = cy - closestY;
+    return dx * dx + dy * dy <= cr * cr;
+  }
+
+  bounceOffRect(rx, ry, rw, rh) {
+    const { BALL } = GAME_CONFIG;
+    const overlapX = (rw / 2 + this.radius) - Math.abs(this.x - rx);
+    const overlapY = (rh / 2 + this.radius) - Math.abs(this.y - ry);
+    if (overlapX < overlapY) {
+      this.vx = -this.vx;
+      return;
+    }
+    const prevVy = this.vy;
+    this.vy = -this.vy;
+    if (this.effects.yellow > 0) {
+      if (this.vy < 0) {
+        const speedMult = this.effects.green > 0 ? BALL.GREEN_SPEED_MULTIPLIER : 1.0;
+        const minUpVy = Math.sqrt(2 * BALL.YELLOW_GRAVITY * Math.max(120, this.y + 60)) * speedMult;
+        this.vy = -Math.max(Math.abs(this.vy), minUpVy);
+      } else if (this.effects.green > 0 && prevVy < 0) {
+        this.vy /= BALL.GREEN_SPEED_MULTIPLIER;
+      }
+    }
   }
 
   /**
@@ -380,9 +416,9 @@ class Ball {
    * 現在の反射角度の軌道上にブロックや敵がなければ、軌道周辺を探索し、
    * 近くに標的があればそこに当たる角度へ軌道を補正する。
    */
-  computeCyanAimAssistAngle(baseAngle, blocks, enemies) {
+  computeCyanAimAssistAngle(baseAngle, blocks, enemies, boss = null, supplyDrops = []) {
     // 1. 元の軌道でそのままブロックまたは敵に当たるかシミュレート
-    if (this.simulateTrajectoryHitsTarget(baseAngle, blocks, enemies, 0)) {
+    if (this.simulateTrajectoryHitsTarget(baseAngle, blocks, enemies, 0, boss, supplyDrops)) {
       return baseAngle;
     }
 
@@ -398,7 +434,7 @@ class Ball {
         for (const sign of [1, -1]) {
           const candidate = baseAngle + sign * delta;
           if (candidate < minAngle || candidate > maxAngle) continue;
-          if (this.simulateTrajectoryHitsTarget(candidate, blocks, enemies, margin)) {
+          if (this.simulateTrajectoryHitsTarget(candidate, blocks, enemies, margin, boss, supplyDrops)) {
             return candidate;
           }
         }
@@ -411,7 +447,7 @@ class Ball {
   /**
    * 指定した反射角度でボールの軌道をシミュレートし、ブロックまたは敵に当たるか判定する
    */
-  simulateTrajectoryHitsTarget(angle, blocks, enemies, radiusMargin = 0) {
+  simulateTrajectoryHitsTarget(angle, blocks, enemies, radiusMargin = 0, boss = null, supplyDrops = []) {
     const { WIDTH, PADDLE, BALL } = GAME_CONFIG;
     const isYellow = this.effects.yellow > 0;
     const isGreen = this.effects.green > 0;
@@ -475,20 +511,18 @@ class Ball {
         break;
       }
 
-      // ブロックとのヒットチェック
+      // ブロック・サプライドロップとのヒットチェック
       for (const blk of blocks) {
         if (!blk.alive || !blk.collidable) continue;
-        const bLeft = blk.x - blk.w / 2;
-        const bRight = blk.x + blk.w / 2;
-        const bTop = blk.y - blk.h / 2;
-        const bBottom = blk.y + blk.h / 2;
-
-        const closestX = ColorUtils.clamp(simX, bLeft, bRight);
-        const closestY = ColorUtils.clamp(simY, bTop, bBottom);
-        const dx = simX - closestX;
-        const dy = simY - closestY;
-
-        if (dx * dx + dy * dy <= simRadius * simRadius) {
+        if (this.rectOverlapsCircle(blk.x, blk.y, blk.w, blk.h, simX, simY, simRadius)) {
+          return true;
+        }
+      }
+      const simElapsed = (step + 1) * simDt;
+      for (const drop of supplyDrops) {
+        if (!drop.alive) continue;
+        const dyPos = drop.y + drop.vy * simElapsed;
+        if (this.rectOverlapsCircle(drop.x, dyPos, drop.w, drop.h, simX, simY, simRadius)) {
           return true;
         }
       }
@@ -504,6 +538,25 @@ class Ball {
         const dist = Math.hypot(simX - ex, simY - ey);
         if (dist <= simRadius + enemy.currentRadius) {
           return true;
+        }
+      }
+
+      // ボスのダメージ有効部位とのヒットチェック
+      if (boss && !boss.isDefeated() && boss.introProgress >= 1) {
+        if (boss.areArmsAlive()) {
+          for (const arm of [boss.leftArm, boss.rightArm]) {
+            if (arm.hp <= 0) continue;
+            for (const c of arm.circles) {
+              if (Math.hypot(simX - c.x, simY - c.y) <= simRadius + c.r) {
+                return true;
+              }
+            }
+          }
+        } else {
+          const verts = boss.getHeadVertices();
+          if (boss.checkCircleTriangleCollision(simX, simY, simRadius, verts[0], verts[1], verts[2])) {
+            return true;
+          }
         }
       }
     }
