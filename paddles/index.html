@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Paddles</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Google+Sans+Flex:opsz,wght@8..144,100..1000&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+  <div id="game-wrapper">
+    <canvas id="game-canvas" width="780" height="900"></canvas>
+    <div id="center-controls">
+      <button id="play-button" type="button" aria-label="Play">
+        <svg class="icon-play" viewBox="0 0 100 100" width="84" height="84" aria-hidden="true">
+          <polygon points="24,14 88,50 24,86" fill="#ffffff" />
+        </svg>
+        <svg class="icon-ready-check" viewBox="0 0 100 100" width="84" height="84" fill="none" stroke="#ffffff"
+          stroke-width="10" stroke-linecap="butt" stroke-linejoin="miter" aria-hidden="true">
+          <polyline points="20,52 42,74 82,28" />
+        </svg>
+        <svg class="icon-restart" viewBox="0 0 100 100" width="84" height="84" fill="none" aria-hidden="true">
+          <path d="M 77.05 57.25 A 28 28 0 1 1 66.06 27.06" stroke="#ffffff" stroke-width="9" stroke-linecap="butt" />
+          <polygon points="77.5,35.1 73.0,17.2 59.2,36.9" fill="#ffffff" />
+        </svg>
+      </button>
+      <input id="nickname-input" type="text" maxlength="12" placeholder="NICKNAME" autocomplete="off" spellcheck="false"
+        aria-label="Nickname">
+      <div id="end-players" class="hidden" aria-live="polite"></div>
+      <div id="lobby-hint" class="hidden" aria-live="polite"></div>
+    </div>
+    <div id="room-controls">
+      <button id="copy-link-button" type="button" aria-label="Copy invite link" title="Copy invite link">
+        <svg class="icon-link" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor"
+          stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+          <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+        </svg>
+        <svg class="icon-check" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor"
+          stroke-width="2.4" stroke-linecap="butt" stroke-linejoin="miter" aria-hidden="true">
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+      </button>
+      <div id="room-status" aria-live="polite"></div>
+    </div>
+  </div>
+  <script src="src/utils/constants.js"></script>
+  <script src="src/utils/color.js"></script>
+  <script src="src/utils/shapes.js"></script>
+  <script src="src/maps.js"></script>
+  <script src="src/enemies.js"></script>
+  <script src="src/entities/backgroundEffect.js"></script>
+  <script src="src/entities/effectManager.js"></script>
+  <script src="src/entities/paddle.js"></script>
+  <script src="src/entities/enemy.js"></script>
+  <script src="src/entities/item.js"></script>
+  <script src="src/entities/ball.js"></script>
+  <script src="src/net/multiplayer.js"></script>
+  <script src="src/main.js"></script>
+</body>
+
+</html>
