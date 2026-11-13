@@ -618,19 +618,28 @@
     }
   });
 
-  canvas.addEventListener('pointerdown', (e) => {
+  function isInteractiveControlTarget(target) {
+    return Boolean(
+      target &&
+      typeof target.closest === 'function' &&
+      target.closest('#center-controls, #room-controls')
+    );
+  }
+
+  window.addEventListener('pointerdown', (e) => {
     if (game.state !== 'playing') return;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (isInteractiveControlTarget(e.target)) return;
     isPointerDown = true;
     updatePointerFromClientX(e.clientX);
-    if (canvas.setPointerCapture) {
+    if (e.target && typeof e.target.setPointerCapture === 'function') {
       try {
-        canvas.setPointerCapture(e.pointerId);
+        e.target.setPointerCapture(e.pointerId);
       } catch (_) {}
     }
   });
 
-  canvas.addEventListener('pointermove', (e) => {
+  window.addEventListener('pointermove', (e) => {
     if (game.state !== 'playing' || !isPointerDown) return;
     updatePointerFromClientX(e.clientX);
   });
@@ -643,25 +652,32 @@
     isPointerDown = false;
   });
 
-  canvas.addEventListener('touchstart', (e) => {
+  window.addEventListener('touchstart', (e) => {
     if (game.state !== 'playing') return;
-    if (e.touches.length > 0) {
-      e.preventDefault();
+    if (isInteractiveControlTarget(e.target)) return;
+    if (e.touches && e.touches.length > 0) {
+      if (e.cancelable) e.preventDefault();
       isPointerDown = true;
       updatePointerFromClientX(e.touches[0].clientX);
     }
   }, { passive: false });
 
-  canvas.addEventListener('touchmove', (e) => {
+  window.addEventListener('touchmove', (e) => {
     if (game.state !== 'playing' || !isPointerDown) return;
-    if (e.touches.length > 0) {
-      e.preventDefault();
+    if (e.touches && e.touches.length > 0) {
+      if (e.cancelable) e.preventDefault();
       updatePointerFromClientX(e.touches[0].clientX);
     }
   }, { passive: false });
 
   window.addEventListener('touchend', () => {
     isPointerDown = false;
+  });
+
+  window.addEventListener('blur', () => {
+    isPointerDown = false;
+    input.left = false;
+    input.right = false;
   });
 
   playButton.addEventListener('click', () => {

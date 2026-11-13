@@ -227,7 +227,8 @@ class Enemy {
     const { COLORS, ENEMY } = GAME_CONFIG;
     let drawColor = COLORS.white;
     const isSelfDestruction = this.bullet_type === 'self_destruction';
-    // self_destruction の場合は敵自身が敵弾判定を持つため、中抜き＆0.5秒サイクルで赤→白点滅（イージングなし）
+    // self_destruction の場合は敵自身が敵弾判定を持つため、0.5秒サイクルで赤→白点滅（イージングなし）
+    // それ以外の敵は赤点滅させず白色枠とし、全エネミー共通で内部は黒色で描画する
     if (isSelfDestruction) {
       const phase = this.timeAlive % ENEMY.BLINK_CYCLE;
       drawColor = phase < ENEMY.BLINK_CYCLE / 2 ? COLORS.red : COLORS.white;
@@ -242,7 +243,7 @@ class Enemy {
       this.rotation,
       drawColor,
       1,
-      isSelfDestruction
+      true
     );
   }
 }

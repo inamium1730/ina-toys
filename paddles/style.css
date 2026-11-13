@@ -14,6 +14,7 @@ body {
   color: #ffffff;
   font-family: 'Google Sans Flex', sans-serif;
   overflow: hidden;
+  touch-action: none;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -159,6 +160,7 @@ body {
   pointer-events: auto;
   user-select: text;
   -webkit-user-select: text;
+  touch-action: manipulation;
   transition: border-color 0.2s ease, opacity 0.25s ease, transform 0.22s ease;
 }
 

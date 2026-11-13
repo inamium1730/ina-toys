@@ -40,7 +40,7 @@ const MAPS = [
       '    #####    ',
       '      #      '
     ],
-    enemies: ['triangle', 'diamond'],
+    enemies: ['diamond'],
     spawn_interval: 18,
     spawn_limit: 2
   },
@@ -54,7 +54,7 @@ const MAPS = [
       '## ####### ##',
       ' ########### '
     ],
-    enemies: ['triangle', 'diamond', 'pentagon'],
+    enemies: ['pentagon'],
     spawn_interval: 16.5,
     spawn_limit: 3
   },
@@ -68,8 +68,64 @@ const MAPS = [
       ' ## ## ## ## ',
       '#############'
     ],
-    enemies: ['triangle', 'diamond', 'pentagon', 'hexagon'],
+    enemies: ['hexagon'],
     spawn_interval: 15,
     spawn_limit: 4
+  },
+  {
+    identifier: 6,
+    name: 'mustard',
+    map: [
+      '#   #   #   #',
+      ' # # # # # # ',
+      ' # # # # # # ',
+      ' # # # # # # ',
+      '  #   #   #  '
+    ],
+    enemies: ['triangle', 'diamond'],
+    spawn_interval: 10,
+    spawn_limit: 10
+  },
+  {
+    identifier: 7,
+    name: 'chained',
+    map: [
+      '             ',
+      '## ### ### ##',
+      '# ## ### ## #',
+      '## ### ### ##',
+      '             '
+    ],
+    enemies: ['pentagon', 'diamond'],
+    spawn_interval: 10,
+    spawn_limit: 10
+  },
+  {
+    identifier: 8,
+    name: 'web',
+    map: [
+      '#  #  #  #  #',
+      ' ## ## ## ## ',
+      '  ## ### ##  ',
+      ' ## ## ## ## ',
+      '#  #  #  #  #'
+    ],
+    enemies: ['pentagon', 'hexagon'],
+    spawn_interval: 10,
+    spawn_limit: 10
+  },
+  {
+    identifier: 9,
+    name: 'spider',
+    map: [
+      '##  #   #  ##',
+      '  #########  ',
+      '#############',
+      '  #########  ',
+      '##  #   #  ##'
+    ],
+    enemies: ['triangle', 'pentagon', 'diamond', 'hexagon'],
+    spawn_interval: 10,
+    spawn_limit: 10
   }
 ];

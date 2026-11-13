@@ -110,9 +110,10 @@ class Ball {
       this.radius += (baseTargetRadius - this.radius) * Math.min(1, dt * 10);
 
       if (isYellow) {
-        // 弱めの重力による物理バウンド移動
+        // 弱めの重力による物理バウンド移動（緑効果併用時は上昇中のみ重力・上向き速度を加速し、落下速度は増加させない）
         const speedMult = isGreen ? BALL.GREEN_SPEED_MULTIPLIER : 1.0;
-        const gravScale = speedMult * speedMult;
+        const risingGravMult = (isGreen && this.vy < 0) ? speedMult : 1.0;
+        const gravScale = risingGravMult * risingGravMult;
         this.vy += BALL.YELLOW_GRAVITY * gravScale * dt;
         const maxVx = BALL.YELLOW_MAX_VX * speedMult;
         this.vx = ColorUtils.clamp(this.vx, -maxVx, maxVx);
@@ -182,7 +183,11 @@ class Ball {
       }
       if (this.y - this.radius < 0) {
         this.y = this.radius;
+        const prevVy = this.vy;
         this.vy = Math.abs(this.vy);
+        if (isYellow && isGreen && prevVy < 0) {
+          this.vy /= BALL.GREEN_SPEED_MULTIPLIER;
+        }
       }
 
       // 自機パドルとの衝突（複数パドルが重なっている場合はそれぞれの反射方向を平均する）
@@ -293,11 +298,16 @@ class Ball {
             if (overlapX < overlapY) {
               this.vx = -this.vx;
             } else {
+              const prevVy = this.vy;
               this.vy = -this.vy;
-              if (this.effects.yellow > 0 && this.vy < 0) {
-                const speedMult = this.effects.green > 0 ? BALL.GREEN_SPEED_MULTIPLIER : 1.0;
-                const minUpVy = Math.sqrt(2 * BALL.YELLOW_GRAVITY * Math.max(120, this.y + 60)) * speedMult;
-                this.vy = -Math.max(Math.abs(this.vy), minUpVy);
+              if (this.effects.yellow > 0) {
+                if (this.vy < 0) {
+                  const speedMult = this.effects.green > 0 ? BALL.GREEN_SPEED_MULTIPLIER : 1.0;
+                  const minUpVy = Math.sqrt(2 * BALL.YELLOW_GRAVITY * Math.max(120, this.y + 60)) * speedMult;
+                  this.vy = -Math.max(Math.abs(this.vy), minUpVy);
+                } else if (this.effects.green > 0 && prevVy < 0) {
+                  this.vy /= BALL.GREEN_SPEED_MULTIPLIER;
+                }
               }
             }
             break;
@@ -316,6 +326,7 @@ class Ball {
 
           if (this.effects.cyan <= 0) {
             this.spawningFromCenter = false;
+            const prevVy = this.vy;
             const nx = (this.x - enemy.x) / (dist || 1);
             const ny = (this.y - enemy.y) / (dist || 1);
             const speed = Math.hypot(this.vx, this.vy);
@@ -323,6 +334,8 @@ class Ball {
             this.vy = ny * speed;
             if (this.effects.yellow <= 0) {
               this.clampVerticalAngle(speed);
+            } else if (this.effects.green > 0 && prevVy < 0 && this.vy > 0) {
+              this.vy /= BALL.GREEN_SPEED_MULTIPLIER;
             }
             this.x = enemy.x + nx * (enemy.currentRadius + this.radius + 2);
             this.y = enemy.y + ny * (enemy.currentRadius + this.radius + 2);
@@ -426,7 +439,8 @@ class Ball {
 
     for (let step = 0; step < maxSteps; step++) {
       if (isYellow) {
-        const gravScale = speedMult * speedMult;
+        const risingGravMult = (isGreen && simVy < 0) ? speedMult : 1.0;
+        const gravScale = risingGravMult * risingGravMult;
         simVy += BALL.YELLOW_GRAVITY * gravScale * simDt;
       }
 
@@ -445,7 +459,11 @@ class Ball {
       // 上端の壁反射
       if (simY - simRadius < 0) {
         simY = simRadius;
+        const prevSimVy = simVy;
         simVy = Math.abs(simVy);
+        if (isYellow && isGreen && prevSimVy < 0) {
+          simVy /= BALL.GREEN_SPEED_MULTIPLIER;
+        }
         hasBouncedTop = true;
       }
 
