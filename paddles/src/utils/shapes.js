@@ -67,9 +67,160 @@ class ShapeRenderer {
     ctx.restore();
   }
 
+  static drawClubPath(ctx, x, y, radius, rotation = 0) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(rotation);
+    const r = radius;
+    const lobeR = r * 0.38;
+    const topCy = -r * 0.42;
+    const sideCx = r * 0.40;
+    const sideCy = r * 0.16;
+
+    // 3つの円形ローブの外周交点から途切れなく外郭をトレースし、下端に広がりのある茎を接続
+    const waistTopStart = Math.atan2(0.209, -0.318);
+    const waistTopEnd = Math.atan2(0.209, 0.318);
+    const waistRightStart = Math.atan2(-0.371, -0.082);
+    const stemRightAngle = Math.atan2(0.22, -0.29);
+    const stemLeftAngle = Math.atan2(0.22, 0.29);
+    const waistLeftEnd = Math.atan2(-0.371, 0.082);
+
+    ctx.beginPath();
+    let started = false;
+    const pushArcPoints = (cx, cy, startA, endA, steps) => {
+      let span = endA - startA;
+      while (span <= 0) span += Math.PI * 2;
+      for (let i = 0; i <= steps; i++) {
+        const a = startA + (span * i) / steps;
+        const px = cx + Math.cos(a) * lobeR;
+        const py = cy + Math.sin(a) * lobeR;
+        if (!started) {
+          ctx.moveTo(px, py);
+          started = true;
+        } else {
+          ctx.lineTo(px, py);
+        }
+      }
+    };
+
+    pushArcPoints(0, topCy, waistTopStart, waistTopEnd, 14);
+    pushArcPoints(sideCx, sideCy, waistRightStart, stemRightAngle, 14);
+    ctx.lineTo(r * 0.25, r * 0.90);
+    ctx.lineTo(-r * 0.25, r * 0.90);
+    pushArcPoints(-sideCx, sideCy, stemLeftAngle, waistLeftEnd, 14);
+    ctx.closePath();
+    ctx.restore();
+  }
+
+  static drawSpadePath(ctx, x, y, radius, rotation = 0) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(rotation);
+    const r = radius;
+    // 先端 (-Y) からハート上下反転カーブ＋広がりのある茎 (+Y)
+    const pts = [
+      [0, -0.96],
+      [0.22, -0.58],
+      [0.52, -0.24],
+      [0.78, 0.04],
+      [0.84, 0.28],
+      [0.74, 0.48],
+      [0.52, 0.56],
+      [0.28, 0.50],
+      [0.12, 0.36],
+      [0.26, 0.90],
+      [-0.26, 0.90],
+      [-0.12, 0.36],
+      [-0.28, 0.50],
+      [-0.52, 0.56],
+      [-0.74, 0.48],
+      [-0.84, 0.28],
+      [-0.78, 0.04],
+      [-0.52, -0.24],
+      [-0.22, -0.58]
+    ];
+    ctx.beginPath();
+    for (let i = 0; i < pts.length; i++) {
+      const px = pts[i][0] * r;
+      const py = pts[i][1] * r;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.restore();
+  }
+
+  static drawPickaxePath(ctx, x, y, radius, rotation = 0) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(rotation);
+    const r = radius;
+    // 上部の湾曲ツルハシ刃と下向きの柄を単一閉パスで描画
+    const pts = [
+      [0, -0.78],
+      [0.15, -0.64],
+      [0.45, -0.52],
+      [0.74, -0.30],
+      [0.94, -0.02],
+      [0.64, -0.20],
+      [0.36, -0.32],
+      [0.12, -0.36],
+      [0.12, 0.90],
+      [-0.12, 0.90],
+      [-0.12, -0.36],
+      [-0.36, -0.32],
+      [-0.64, -0.20],
+      [-0.94, -0.02],
+      [-0.74, -0.30],
+      [-0.45, -0.52],
+      [-0.15, -0.64]
+    ];
+    ctx.beginPath();
+    for (let i = 0; i < pts.length; i++) {
+      const px = pts[i][0] * r;
+      const py = pts[i][1] * r;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.restore();
+  }
+
   static drawEnemyShape(ctx, enemyType, x, y, radius, rotation, color = '#ffffff', alpha = 1, hollow = false) {
     ctx.save();
     ctx.globalAlpha = alpha;
+
+    if (enemyType === 'quadiamond') {
+      // 4つのひし形を上下左右に配置 (❖)
+      const offset = radius * 0.52;
+      const subR = radius * 0.40;
+      const dirs = [
+        [0, -offset],
+        [offset, 0],
+        [0, offset],
+        [-offset, 0]
+      ];
+      for (const [ox, oy] of dirs) {
+        const cos = Math.cos(rotation);
+        const sin = Math.sin(rotation);
+        const cx = x + ox * cos - oy * sin;
+        const cy = y + ox * sin + oy * cos;
+        ShapeRenderer.drawPolygonPath(ctx, cx, cy, subR, 4, rotation);
+        if (hollow) {
+          ctx.fillStyle = '#000000';
+          ctx.fill();
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 2.4;
+          ctx.lineJoin = 'miter';
+          ctx.stroke();
+        } else {
+          ctx.fillStyle = color;
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+      return;
+    }
 
     if (enemyType === 'triangle') {
       ShapeRenderer.drawPolygonPath(ctx, x, y, radius, 3, rotation + Math.PI / 2);
@@ -79,6 +230,12 @@ class ShapeRenderer {
       ShapeRenderer.drawPolygonPath(ctx, x, y, radius, 5, rotation + Math.PI / 2);
     } else if (enemyType === 'hexagon') {
       ShapeRenderer.drawPolygonPath(ctx, x, y, radius, 6, rotation);
+    } else if (enemyType === 'club') {
+      ShapeRenderer.drawClubPath(ctx, x, y, radius, rotation + Math.PI);
+    } else if (enemyType === 'spade') {
+      ShapeRenderer.drawSpadePath(ctx, x, y, radius, rotation + Math.PI);
+    } else if (enemyType === 'pickaxe') {
+      ShapeRenderer.drawPickaxePath(ctx, x, y, radius, rotation);
     } else {
       ShapeRenderer.drawPolygonPath(ctx, x, y, radius, 3, rotation + Math.PI / 2);
     }
@@ -102,6 +259,58 @@ class ShapeRenderer {
       return ctx.measureText(text).width;
     }
     return String(text || '').length * 7;
+  }
+
+  static _hashUnit(seed) {
+    let h = (seed ^ 0x9e3779b9) >>> 0;
+    h = Math.imul(h ^ (h >>> 16), 0x85ebca6b) >>> 0;
+    h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35) >>> 0;
+    h = (h ^ (h >>> 16)) >>> 0;
+    return h / 4294967295;
+  }
+
+  /**
+   * quadiamond (connect) 間のレーザーを 0.25 秒おきにイージング無しでランダムなギザギザとして描画する
+   */
+  static drawConnectLaser(ctx, x1, y1, x2, y2, idA, idB, elapsed, color) {
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const dist = Math.hypot(dx, dy);
+
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2.0;
+    ctx.lineJoin = 'miter';
+    ctx.lineCap = 'butt';
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+
+    if (dist > 4) {
+      const tick = Math.floor(Math.max(0, elapsed || 0) / 0.25);
+      const minId = Math.min(idA || 0, idB || 0);
+      const maxId = Math.max(idA || 0, idB || 0);
+      const seedBase = ((minId * 73856093) ^ (maxId * 19349663) ^ (tick * 83492791)) >>> 0;
+      const segments = Math.max(4, Math.min(18, Math.round(dist / 26)));
+      const nx = -dy / dist;
+      const ny = dx / dist;
+      const firstSign = ShapeRenderer._hashUnit(seedBase) < 0.5 ? 1 : -1;
+
+      for (let s = 1; s < segments; s++) {
+        const baseT = s / segments;
+        const tJitter = (ShapeRenderer._hashUnit((seedBase + s * 31) >>> 0) - 0.5) * (0.35 / segments);
+        const t = Math.max(0.02, Math.min(0.98, baseT + tJitter));
+        // 正の値の範囲でランダム → 負の値の範囲でランダム を交互に繰り返して鋭いギザギザを作る
+        const sign = (s % 2 === 1) ? firstSign : -firstSign;
+        const mag = 4.5 + ShapeRenderer._hashUnit((seedBase + s * 53 + 11) >>> 0) * 9.5;
+        const px = x1 + dx * t + nx * sign * mag;
+        const py = y1 + dy * t + ny * sign * mag;
+        ctx.lineTo(px, py);
+      }
+    }
+
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+    ctx.restore();
   }
 
   static drawSharpCheckmark(ctx, cx, cy, size = 8, lineWidth = 1.9, color = '#ffffff', alpha = 1) {

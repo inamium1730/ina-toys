@@ -256,8 +256,8 @@ class EffectManager {
       const alpha = (1 - t) * 0.55;
 
       // 追従対象(target)がある場合は、現在の座標・角度をリアルタイムに参照して置いていかれないようにする
-      const px = pls.target ? pls.target.x : pls.x;
-      const py = pls.target ? pls.target.y : pls.y;
+      const px = pls.target ? (pls.target.x + (pls.target.corrX || 0)) : pls.x;
+      const py = pls.target ? (pls.target.y + (pls.target.corrY || 0)) : pls.y;
       const pAngle = pls.target
         ? (pls.target.angle !== undefined ? pls.target.angle : (pls.target.rotation !== undefined ? pls.target.rotation : pls.angle))
         : pls.angle;

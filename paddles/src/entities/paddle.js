@@ -18,13 +18,16 @@ class Paddle {
     this.x = options.x !== undefined ? options.x : defaultX;
     this.y = PADDLE.Y;
     this.hp = this.maxHp;
-    this.currentWidth = this.maxHp * PADDLE.WIDTH_PER_HP;
+    this.currentWidth = this.computeWidthForHp(this.hp);
     this.height = PADDLE.HEIGHT;
     this.timeSinceLastDamage = 0;
     this.regenParticleTimer = 0;
     this.effectClock = 0;
     this.pulseTimer = 0;
     this.invincibleTimer = 0;
+    this.respawnTimer = 0;
+    this.respawnPenalty = 0;
+    this._deathRespawnHandled = false;
     this.contestedItemsCount = options.contestedItemsCount || 0;
     this.effects = {
       cyan: 0,
@@ -77,7 +80,7 @@ class Paddle {
       this.timeSinceLastDamage += dt;
       if (this.timeSinceLastDamage >= PADDLE.REGEN_DELAY) {
         this.hp = Math.min(this.maxHp, this.hp + PADDLE.REGEN_RATE * dt);
-        this.currentWidth = this.hp * PADDLE.WIDTH_PER_HP;
+        this.currentWidth = this.computeWidthForHp(this.hp);
         const halfW = this.currentWidth / 2;
         this.x = ColorUtils.clamp(this.x, halfW, WIDTH - halfW);
 
@@ -85,7 +88,7 @@ class Paddle {
         this.regenParticleTimer -= dt;
         if (this.regenParticleTimer <= 0) {
           this.regenParticleTimer = 0.055;
-          effectsManager.spawnRegenParticles(this.x, this.y, this.currentWidth, this.height);
+          effectsManager.spawnRegenParticles(this.x, this.y, this.currentWidth, this.height, false);
         }
       }
     }
@@ -112,7 +115,7 @@ class Paddle {
           color: currentColor,
           duration: 0.45,
           maxScale: 1.85
-        });
+        }, false);
       }
     } else if (activeBefore) {
       this.effectClock = 0;
@@ -120,16 +123,80 @@ class Paddle {
     }
   }
 
-  revive(newMaxHp, effectsManager) {
-    const { PADDLE, COLORS, WIDTH } = GAME_CONFIG;
+  /**
+   * ゲスト側ローカル専用: ゲームプレイに影響しない再生パーティクルや星エフェクトのパルスを描画する
+   */
+  updateCosmeticEffects(dt, effectsManager) {
+    if (this.hp <= 0 || !effectsManager) return;
+    const { PADDLE, ITEM } = GAME_CONFIG;
+    if (this.hp < this.maxHp) {
+      this.timeSinceLastDamage += dt;
+      if (this.timeSinceLastDamage >= PADDLE.REGEN_DELAY) {
+        this.regenParticleTimer -= dt;
+        if (this.regenParticleTimer <= 0) {
+          this.regenParticleTimer = 0.055;
+          effectsManager.spawnRegenParticles(this.x, this.y, this.currentWidth, this.height, false);
+        }
+      }
+    }
+    if (ColorUtils.hasAnyStarEffect(this.effects)) {
+      this.pulseTimer += dt;
+      if (this.pulseTimer >= ITEM.PULSE_INTERVAL) {
+        this.pulseTimer -= ITEM.PULSE_INTERVAL;
+        const currentColor = ColorUtils.getStarEffectColor(this.effects, this.effectClock);
+        effectsManager.spawnPulse({
+          kind: 'rect',
+          target: this,
+          x: this.x,
+          y: this.y,
+          w: this.currentWidth,
+          h: this.height,
+          color: currentColor,
+          duration: 0.45,
+          maxScale: 1.85
+        }, false);
+      }
+    } else {
+      this.pulseTimer = 0;
+    }
+  }
+
+  /**
+   * 参加人数に応じた最大HP時のパドル幅(px)を返す
+   */
+  getMaxWidth() {
+    const { PADDLE, MULTIPLAYER } = GAME_CONFIG;
+    const baseWidth = PADDLE.MAX_HP * PADDLE.WIDTH_PER_HP;
+    const maxPlayers = (MULTIPLAYER && MULTIPLAYER.MAX_PLAYERS) || 4;
+    const count = Math.max(1, Math.min(maxPlayers, this.totalPlayers || 1));
+    const scaleTable = MULTIPLAYER && MULTIPLAYER.WIDTH_SCALE_BY_PLAYER_COUNT;
+    const scale = (scaleTable && scaleTable[count]) || 1.0;
+    return baseWidth * scale;
+  }
+
+  /**
+   * 指定HPに対応するパドル幅(px)を計算する
+   */
+  computeWidthForHp(hp = this.hp) {
+    if (!this.maxHp || this.maxHp <= 0) return 0;
+    return this.getMaxWidth() * Math.max(0, hp) / this.maxHp;
+  }
+
+  revive(newMaxHp, effectsManager, totalPlayers) {
+    const { COLORS, WIDTH } = GAME_CONFIG;
+    if (totalPlayers !== undefined) {
+      this.totalPlayers = totalPlayers;
+    }
     if (newMaxHp !== undefined) {
       this.maxHp = newMaxHp;
     }
     this.hp = this.maxHp;
-    this.currentWidth = this.hp * PADDLE.WIDTH_PER_HP;
+    this.currentWidth = this.computeWidthForHp(this.hp);
     this.timeSinceLastDamage = 0;
     this.regenParticleTimer = 0;
     this.invincibleTimer = 3.0;
+    this.respawnTimer = 0;
+    this._deathRespawnHandled = false;
     const halfW = this.currentWidth / 2;
     this.x = ColorUtils.clamp(this.x, halfW, WIDTH - halfW);
 
@@ -151,11 +218,11 @@ class Paddle {
   takeDamage(damageAmount, effectsManager) {
     if (this.hp <= 0 || this.invincibleTimer > 0) return false;
 
-    const { PADDLE, COLORS } = GAME_CONFIG;
+    const { COLORS } = GAME_CONFIG;
     const oldHp = this.hp;
     const oldWidth = this.currentWidth;
     this.hp = Math.max(0, this.hp - damageAmount);
-    this.currentWidth = this.hp * PADDLE.WIDTH_PER_HP;
+    this.currentWidth = this.computeWidthForHp(this.hp);
     this.timeSinceLastDamage = 0;
 
     if (this.hp <= 0) {

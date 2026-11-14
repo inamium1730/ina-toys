@@ -318,6 +318,168 @@ body {
   pointer-events: none;
 }
 
+#skill-bar {
+  position: absolute;
+  left: calc(100% + 16px);
+  bottom: 20px;
+  right: auto;
+  transform: none;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 10px;
+  z-index: 12;
+  transition: opacity 0.2s ease;
+}
+
+#skill-bar.hidden {
+  display: none;
+}
+
+@media (max-aspect-ratio: 780/900) {
+  #skill-bar {
+    position: fixed;
+    left: 50%;
+    right: auto;
+    bottom: 16px;
+    transform: translateX(-50%);
+    flex-direction: row;
+    justify-content: center;
+  }
+}
+
+.skill-btn {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border: none;
+  background: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+  font-family: 'Google Sans Flex', sans-serif;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  overflow: hidden;
+  outline: none;
+  transition: transform 0.14s ease, opacity 0.2s ease, background 0.35s ease;
+}
+
+.skill-btn:hover:not(:disabled) {
+  transform: scale(1.06);
+}
+
+.skill-btn:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.skill-btn.active,
+.skill-btn.cooldown {
+  background: transparent;
+}
+
+.skill-btn.cooldown:not(.ready):not(.active),
+.skill-btn:disabled:not(.active) {
+  cursor: default;
+}
+
+.skill-btn.cooldown:not(.ready):not(.active) .skill-btn-icon,
+.skill-btn:disabled:not(.active) .skill-btn-icon {
+  opacity: 0.28;
+}
+
+.skill-btn-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 0%;
+  background: transparent;
+  pointer-events: none;
+}
+
+.skill-btn.cooldown .skill-btn-progress {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.skill-btn.active .skill-btn-progress {
+  background: rgba(255, 255, 255, 0.24);
+}
+
+.skill-btn-slot {
+  position: absolute;
+  top: 4px;
+  left: 6px;
+  font-size: 9px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.42);
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 0.35s ease;
+}
+
+.skill-btn-stock {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  font-size: 9px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.72);
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 0.35s ease;
+}
+
+.skill-btn-icon {
+  position: relative;
+  z-index: 1;
+  width: 34px;
+  height: 34px;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+.skill-btn-pending-unlock {
+  background: transparent;
+}
+
+.skill-btn-pending-unlock .skill-btn-icon {
+  opacity: 0;
+  transition: none;
+}
+
+.skill-btn-pending-unlock .skill-btn-slot,
+.skill-btn-pending-unlock .skill-btn-stock {
+  opacity: 0;
+  transition: none;
+}
+
+#skill-unlock-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 40;
+}
+
+.skill-unlock-flyer {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 192px;
+  height: 192px;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  transform-origin: center center;
+}
+
+.skill-unlock-flyer .skill-btn-icon {
+  width: 102px;
+  height: 102px;
+  transition: none;
+}
+
 @keyframes input-shake {
 
   0%,

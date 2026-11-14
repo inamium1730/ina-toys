@@ -135,5 +135,139 @@ const MAPS = [
     enemies: ['triangle', 'pentagon', 'diamond', 'hexagon'],
     spawn_interval: null,
     spawn_limit: 5
+  },
+  {
+    identifier: 11,
+    name: 'audio',
+    map: [
+      '#         #  ',
+      '#   #   # # #',
+      '# # # # # # #',
+      '             ',
+      '#############'
+    ],
+    enemies: ['triangle', 'diamond', 'hexagon', 'pentagon'],
+    spawn_interval: 7.5,
+    spawn_limit: 5
+  },
+  {
+    identifier: 12,
+    name: 'crossroad',
+    map: [
+      '## ## # ## ##',
+      '      #      ',
+      ' ### ### ### ',
+      '      #      ',
+      '## ## # ## ##'
+    ],
+    enemies: ['triangle', 'club'],
+    spawn_interval: 14,
+    spawn_limit: 6
+  },
+  {
+    identifier: 13,
+    name: 'contents',
+    map: [
+      '## #### ## ##',
+      '## #### ## ##',
+      '           ##',
+      '#### ## ## ##',
+      '#### ## ## ##'
+    ],
+    enemies: ['diamond', 'spade'],
+    spawn_interval: 13,
+    spawn_limit: 7
+  },
+  {
+    identifier: 14,
+    name: 'stairs',
+    map: [
+      '           ##',
+      '        #####',
+      '     ########',
+      '  ###########',
+      '#############'
+    ],
+    enemies: ['pentagon', 'quadiamond'],
+    spawn_interval: 12,
+    spawn_limit: 8
+  },
+  {
+    identifier: 15,
+    name: 'bounce',
+    map: [
+      '#############',
+      '             ',
+      '  #########  ',
+      '             ',
+      '    #####    '
+    ],
+    enemies: ['hexagon', 'pickaxe'],
+    spawn_interval: 11,
+    spawn_limit: 9
+  },
+  {
+    identifier: 16,
+    name: 'switch',
+    map: [
+      '#############',
+      '# #       # #',
+      '# #       # #',
+      '# #       # #',
+      '#############'
+    ],
+    enemies: ['club', 'spade', 'triangle'],
+    spawn_interval: 10,
+    spawn_limit: 10
+  },
+  {
+    identifier: 17,
+    name: 'math',
+    map: [
+      ' ##      ##  ',
+      '   #  #    # ',
+      '  #  ### ##  ',
+      ' #    #    # ',
+      ' ###     ##  '
+    ],
+    enemies: ['spade', 'quadiamond', 'diamond'],
+    spawn_interval: 10,
+    spawn_limit: 10
+  },
+  {
+    identifier: 18,
+    name: 'blockdrop',
+    map: [
+      '#### ##  ### ',
+      '      ##  #  ',
+      '   ##        ',
+      '#   #   ## ##',
+      '### #  ##  ##'
+    ],
+    enemies: ['quadiamond', 'pickaxe', 'pentagon'],
+    spawn_interval: 10,
+    spawn_limit: 10
+  },
+  {
+    identifier: 19,
+    name: 'glasses',
+    map: [
+      ' ###     ### ',
+      '#   #   #   #',
+      '# # ##### # #',
+      '#   #   #   #',
+      ' ###     ### '
+    ],
+    enemies: ['hexagon', 'spade', 'club', 'quadiamond', 'pickaxe'],
+    spawn_interval: 10,
+    spawn_limit: 10
+  },
+  {
+    identifier: 20,
+    name: 'snake',
+    map: 'boss',
+    enemies: ['pickaxe', 'quadiamond', 'club', 'spade'],
+    spawn_interval: null,
+    spawn_limit: 5
   }
 ];

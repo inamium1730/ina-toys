@@ -82,6 +82,13 @@ class BigfootBoss {
     this.barrageShotsRemaining = 0;
     this.lastBarrageAngleOffset = 0;
 
+    this.defeatDuration = 5.0;
+    this.defeatStartBodyY = 0;
+    this.defeatSmokeTimer = 0;
+    this.defeatVibClock = 0;
+    this.headShakeX = 0;
+    this.headShakeY = 0;
+
     this.updateGeometry();
   }
 
@@ -126,13 +133,47 @@ class BigfootBoss {
     return this.head.hp <= 0;
   }
 
+  isDefeating() {
+    return this.isDefeated() && this.phase === 'defeated' && this.phaseTimer < (this.defeatDuration || 5.0);
+  }
+
+  startDefeatAnimation() {
+    if (this.phase === 'defeated') return;
+    this.phase = 'defeated';
+    this.phaseTimer = 0;
+    this.defeatStartBodyY = this.bodyOffsetY || 0;
+    this.defeatSmokeTimer = 0;
+    this.defeatVibClock = 0;
+    this.headShakeX = 0;
+    this.headShakeY = 0;
+    this.activeArmSide = null;
+    this.punchStrikeActive = false;
+    this.leftArm.blinking = false;
+    this.rightArm.blinking = false;
+    this.pendingSummons = [];
+  }
+
+  updateDefeatVibration() {
+    const duration = this.defeatDuration || 5.0;
+    if (this.phase !== 'defeated' || this.phaseTimer >= duration) {
+      this.headShakeX = 0;
+      this.headShakeY = 0;
+      return;
+    }
+    const u = ColorUtils.clamp(this.phaseTimer / duration, 0, 1);
+    const t = this.defeatVibClock || this.phaseTimer || 0;
+    const amp = 8.5 * (1 - 0.18 * u);
+    this.headShakeX = (Math.sin(t * 78) * 0.65 + Math.sin(t * 131 + 1.1) * 0.35) * amp;
+    this.headShakeY = (Math.cos(t * 91 + 0.7) * 0.65 + Math.cos(t * 149) * 0.35) * (amp * 0.75);
+  }
+
   getArm(side) {
     return side === 'left' ? this.leftArm : (side === 'right' ? this.rightArm : null);
   }
 
   getHeadVertices() {
-    const pivotX = this.pivotX;
-    const pivotY = this.basePivotY + this.introOffsetY + this.bodyOffsetY + this.headThrustOffsetY;
+    const pivotX = this.pivotX + (this.headShakeX || 0);
+    const pivotY = this.basePivotY + this.introOffsetY + this.bodyOffsetY + this.headThrustOffsetY + (this.headShakeY || 0);
     const cosA = Math.cos(this.headAngle);
     const sinA = Math.sin(this.headAngle);
 
@@ -406,7 +447,7 @@ class BigfootBoss {
     enemies.push(new Enemy(def, spawnX));
   }
 
-  fireSpreadBarrage(enemyBullets, effectsManager) {
+  fireSpreadBarrage(enemyBullets, effectsManager, onBarrageSpawn) {
     const { COLORS } = GAME_CONFIG;
     const verts = this.getHeadVertices();
     const tip = verts[2];
@@ -422,16 +463,25 @@ class BigfootBoss {
     const minAngle = 0.26 + angleOffset;
     const maxAngle = Math.PI - 0.26 + angleOffset;
 
+    const spawned = [];
     for (let i = 0; i < bulletCount; i++) {
       const a = minAngle + (i / (bulletCount - 1)) * (maxAngle - minAngle);
-      enemyBullets.push({
+      const bullet = {
         x: tip.x,
         y: tip.y,
         vx: Math.cos(a) * speed,
         vy: Math.sin(a) * speed,
+        angle: a,
+        speed,
         damage,
         timer: 0
-      });
+      };
+      enemyBullets.push(bullet);
+      spawned.push(bullet);
+    }
+
+    if (onBarrageSpawn && spawned.length > 0) {
+      onBarrageSpawn(spawned);
     }
 
     if (effectsManager) {
@@ -447,7 +497,8 @@ class BigfootBoss {
       enemyBullets = [],
       effectsManager,
       onDamagePaddle,
-      onScreenShake
+      onScreenShake,
+      onBarrageSpawn
     } = context || {};
 
     if (this.head.hitCooldown > 0) {
@@ -460,10 +511,72 @@ class BigfootBoss {
       this.rightArm.hitCooldown = Math.max(0, this.rightArm.hitCooldown - dt);
     }
 
-    if (this.isDefeated() || this.introProgress < 1) {
-      if (this.isDefeated()) {
-        this.pendingSummons = [];
+    if (this.isDefeated()) {
+      this.pendingSummons = [];
+      if (this.phase !== 'defeated') {
+        this.startDefeatAnimation();
       }
+      const duration = this.defeatDuration || 5.0;
+      this.phaseTimer += dt;
+      this.defeatVibClock += dt;
+      const u = ColorUtils.clamp(this.phaseTimer / duration, 0, 1);
+      // 5秒かけて徐々に画面の上へ引っ込む
+      const retractEase = 0.35 * u + 0.65 * (u * u * (3 - 2 * u));
+      this.bodyOffsetY = this.defeatStartBodyY + (-265 - this.defeatStartBodyY) * retractEase;
+      this.headThrustOffsetY *= Math.pow(0.005, dt);
+      this.headAngle += (0 - this.headAngle) * Math.min(1, dt * 10);
+      this.updateDefeatVibration();
+
+      if (onScreenShake && this.phaseTimer < duration) {
+        onScreenShake(0.08, 2.0 * (1 - 0.45 * u));
+      }
+
+      // 円形のパルスアニメーションで煙を表現
+      if (effectsManager && this.phaseTimer < duration) {
+        this.defeatSmokeTimer -= dt;
+        const smokeColors = ['#ffffff', '#d8d8d8', '#a8a8a8'];
+        while (this.defeatSmokeTimer <= 0) {
+          this.defeatSmokeTimer += 0.065;
+          const verts = this.getHeadVertices();
+          const e = Math.random();
+          let sx;
+          let sy;
+          if (e < 0.38) {
+            const p = Math.random();
+            sx = verts[0].x + (verts[2].x - verts[0].x) * p;
+            sy = verts[0].y + (verts[2].y - verts[0].y) * p;
+          } else if (e < 0.76) {
+            const p = Math.random();
+            sx = verts[1].x + (verts[2].x - verts[1].x) * p;
+            sy = verts[1].y + (verts[2].y - verts[1].y) * p;
+          } else {
+            const w1 = Math.random();
+            const w2 = Math.random() * (1 - w1);
+            const w0 = 1 - w1 - w2;
+            sx = verts[0].x * w0 + verts[1].x * w1 + verts[2].x * w2;
+            sy = verts[0].y * w0 + verts[1].y * w1 + verts[2].y * w2;
+          }
+          sx += (Math.random() * 2 - 1) * 26;
+          sy = Math.max(-12, sy + (Math.random() * 2 - 1) * 18);
+          if (sy <= GAME_CONFIG.HEIGHT && verts[2].y > -65) {
+            effectsManager.spawnPulse({
+              kind: 'circle',
+              x: sx,
+              y: sy,
+              radius: 14 + Math.random() * 22,
+              color: smokeColors[Math.floor(Math.random() * smokeColors.length)],
+              duration: 0.65 + Math.random() * 0.45,
+              maxScale: 2.2 + Math.random() * 1.1
+            });
+          }
+        }
+      }
+
+      this.updateGeometry();
+      return;
+    }
+
+    if (this.introProgress < 1) {
       this.updateGeometry();
       return;
     }
@@ -486,7 +599,7 @@ class BigfootBoss {
         this.punchStrikeActive = false;
         this.leftArm.blinking = false;
         this.rightArm.blinking = false;
-        this.enterCooldown(this.attackCooldown, 'next_punch_or_summon');
+        this.enterCooldown(this.getPostAttackCooldown(), 'next_punch_or_summon');
       }
     }
 
@@ -633,7 +746,7 @@ class BigfootBoss {
       if (this.phaseTimer >= 0.15) {
         this.headThrustOffsetY = 34;
         this.updateGeometry();
-        this.fireSpreadBarrage(enemyBullets, effectsManager);
+        this.fireSpreadBarrage(enemyBullets, effectsManager, onBarrageSpawn);
         this.barrageShotsRemaining -= 1;
         this.phase = 'spread_recover';
         this.phaseTimer = 0;
@@ -657,6 +770,87 @@ class BigfootBoss {
     this.updateGeometry();
   }
 
+  applyArmDamage(arm, hitX, hitY, pulseColor, effectsManager, onScore, onSpawnItem, cooldown = 0.08) {
+    if (arm.hp <= 0 || arm.hitCooldown > 0) return false;
+    const { COLORS } = GAME_CONFIG;
+    arm.hitCooldown = cooldown;
+    arm.hp = Math.max(0, arm.hp - 1);
+
+    for (const armCircle of arm.circles) {
+      effectsManager.spawnPulse({
+        kind: 'circle',
+        target: armCircle,
+        x: armCircle.x,
+        y: armCircle.y,
+        radius: armCircle.r,
+        color: pulseColor,
+        duration: arm.hp > 0 ? 0.42 : 0.5,
+        maxScale: arm.hp > 0 ? 1.55 : 2.15
+      });
+    }
+
+    if (arm.hp <= 0) {
+      arm.blinking = false;
+      for (const armCircle of arm.circles) {
+        effectsManager.spawnCircleParticles(armCircle.x, armCircle.y, COLORS.white, 9, 45, 175);
+      }
+      if (onScore) onScore(450);
+      if (onSpawnItem) onSpawnItem(hitX, Math.max(40, hitY), 0.55);
+    } else if (onScore) {
+      onScore(80);
+    }
+    return true;
+  }
+
+  applyHeadDamage(pulseColor, effectsManager, onScore, cooldown = 0.08) {
+    if (this.areArmsAlive() || this.head.hp <= 0 || this.head.hitCooldown > 0) return false;
+    const { COLORS } = GAME_CONFIG;
+    this.head.hitCooldown = cooldown;
+    this.head.hp = Math.max(0, this.head.hp - 1);
+
+    effectsManager.spawnPulse({
+      kind: 'boss_head',
+      target: this.head,
+      x: this.head.x,
+      y: this.head.y,
+      w: this.head.w,
+      h: this.head.h,
+      angle: this.headAngle,
+      color: pulseColor,
+      duration: this.head.hp > 0 ? 0.44 : 0.55,
+      maxScale: this.head.hp > 0 ? 1.48 : 2.1
+    });
+
+    if (this.head.hp <= 0) {
+      this.startDefeatAnimation();
+      effectsManager.spawnCircleParticles(this.head.x, Math.max(60, this.head.y - 60), COLORS.white, 22, 60, 220);
+      if (onScore) onScore(1500);
+    } else if (onScore) {
+      onScore(100);
+    }
+    return true;
+  }
+
+  handleSwingCircleCollision(cx, cy, cr, effectsManager, onScore, onSpawnItem) {
+    if (this.isDefeated() || this.introProgress < 1) return false;
+    const { COLORS } = GAME_CONFIG;
+    for (const arm of [this.leftArm, this.rightArm]) {
+      if (arm.hp <= 0 || arm.hitCooldown > 0) continue;
+      for (const c of arm.circles) {
+        if (Math.hypot(cx - c.x, cy - c.y) <= cr + c.r) {
+          return this.applyArmDamage(arm, c.x, c.y, COLORS.white, effectsManager, onScore, onSpawnItem, 0.22);
+        }
+      }
+    }
+    if (!this.areArmsAlive() && this.head.hitCooldown <= 0) {
+      const verts = this.getHeadVertices();
+      if (this.checkCircleTriangleCollision(cx, cy, cr, verts[0], verts[1], verts[2])) {
+        return this.applyHeadDamage(COLORS.white, effectsManager, onScore, 0.22);
+      }
+    }
+    return false;
+  }
+
   /**
    * ボールとの衝突およびダメージ処理
    * - 両腕が残っている間は、顔に当たっても反射するのみでダメージは入らない
@@ -666,6 +860,7 @@ class BigfootBoss {
     if (this.isDefeated() || this.introProgress < 1) return false;
     const { COLORS, BALL } = GAME_CONFIG;
     const isCyanBall = ball.effects.cyan > 0;
+    const pulseColor = isCyanBall ? COLORS.cyan : COLORS.white;
 
     // 1. 左右の腕（各3つの円）との衝突判定
     for (const arm of [this.leftArm, this.rightArm]) {
@@ -678,36 +873,7 @@ class BigfootBoss {
           const nx = dx / (dist || 1);
           const ny = dy / (dist || 1);
           this.reflectBall(ball, c.x + nx * (c.r + ball.radius + 2), c.y + ny * (c.r + ball.radius + 2), nx, ny, BALL);
-
-          if (arm.hitCooldown <= 0) {
-            arm.hitCooldown = 0.08;
-            arm.hp = Math.max(0, arm.hp - 1);
-            const pulseColor = isCyanBall ? COLORS.cyan : COLORS.white;
-
-            for (const armCircle of arm.circles) {
-              effectsManager.spawnPulse({
-                kind: 'circle',
-                target: armCircle,
-                x: armCircle.x,
-                y: armCircle.y,
-                radius: armCircle.r,
-                color: pulseColor,
-                duration: arm.hp > 0 ? 0.42 : 0.5,
-                maxScale: arm.hp > 0 ? 1.55 : 2.15
-              });
-            }
-
-            if (arm.hp <= 0) {
-              arm.blinking = false;
-              for (const armCircle of arm.circles) {
-                effectsManager.spawnCircleParticles(armCircle.x, armCircle.y, COLORS.white, 9, 45, 175);
-              }
-              if (onScore) onScore(450);
-              if (onSpawnItem) onSpawnItem(c.x, Math.max(40, c.y), 0.55);
-            } else {
-              if (onScore) onScore(80);
-            }
-          }
+          this.applyArmDamage(arm, c.x, c.y, pulseColor, effectsManager, onScore, onSpawnItem, 0.08);
           return true;
         }
       }
@@ -727,31 +893,7 @@ class BigfootBoss {
       );
 
       // 両腕を先に破壊しないと顔にはダメージが入らない
-      if (!this.areArmsAlive() && this.head.hitCooldown <= 0) {
-        this.head.hitCooldown = 0.08;
-        this.head.hp = Math.max(0, this.head.hp - 1);
-        const pulseColor = isCyanBall ? COLORS.cyan : COLORS.white;
-
-        effectsManager.spawnPulse({
-          kind: 'boss_head',
-          target: this.head,
-          x: this.head.x,
-          y: this.head.y,
-          w: this.head.w,
-          h: this.head.h,
-          angle: this.headAngle,
-          color: pulseColor,
-          duration: this.head.hp > 0 ? 0.44 : 0.55,
-          maxScale: this.head.hp > 0 ? 1.48 : 2.1
-        });
-
-        if (this.head.hp <= 0) {
-          effectsManager.spawnCircleParticles(this.head.x, Math.max(60, this.head.y - 60), COLORS.white, 22, 60, 220);
-          if (onScore) onScore(1500);
-        } else {
-          if (onScore) onScore(100);
-        }
-      }
+      this.applyHeadDamage(pulseColor, effectsManager, onScore, 0.08);
       return true;
     }
 
@@ -841,7 +983,7 @@ class BigfootBoss {
   }
 
   render(ctx) {
-    if (this.isDefeated()) return;
+    if (this.isDefeated() && !this.isDefeating()) return;
     const { COLORS, ENEMY } = GAME_CONFIG;
 
     // 1. 顔（1つの下向き三角形）を描画
@@ -909,7 +1051,98 @@ class BigfootBoss {
     ];
   }
 
-  applySnapshot(data) {
+  applySnapshotStateImmediate(fields) {
+    this.introProgress = fields.introProgress;
+    this.introOffsetY = -(1 - (1 - Math.pow(1 - ColorUtils.clamp(this.introProgress, 0, 1), 3))) * 235;
+    this.bodyOffsetY = fields.bodyOffsetY;
+    this.headThrustOffsetY = fields.headThrustOffsetY;
+    this.headAngle = fields.headAngle;
+
+    const verts = this.getHeadVertices();
+    this.head.x = verts[2].x;
+    this.head.y = verts[2].y;
+    this.head.angle = this.headAngle;
+
+    for (let i = 0; i < 3; i++) {
+      const lc = fields.leftCircles[i];
+      if (lc) {
+        this.leftArm.circles[i].x = lc[0];
+        this.leftArm.circles[i].y = lc[1];
+        this.leftArm.circles[i].r = lc[2];
+        this.leftArm.circles[i].radius = lc[2];
+      }
+      const rc = fields.rightCircles[i];
+      if (rc) {
+        this.rightArm.circles[i].x = rc[0];
+        this.rightArm.circles[i].y = rc[1];
+        this.rightArm.circles[i].r = rc[2];
+        this.rightArm.circles[i].radius = rc[2];
+      }
+    }
+  }
+
+  captureInterpState() {
+    return {
+      introProgress: this.introProgress,
+      bodyOffsetY: this.bodyOffsetY,
+      headThrustOffsetY: this.headThrustOffsetY,
+      headAngle: this.headAngle,
+      leftCircles: this.leftArm.circles.map((c) => [c.x, c.y, c.r]),
+      rightCircles: this.rightArm.circles.map((c) => [c.x, c.y, c.r])
+    };
+  }
+
+  /**
+   * ゲスト側クライアント補間更新（60fpsでボス本体・頭・両腕と点滅を滑らかに進行させる）
+   */
+  updateClient(dt) {
+    if (this._hasSnapInterp && this._interpFrom && this._interpTo) {
+      this._interpElapsed += dt;
+      const alpha = this._interpDuration > 0 ? Math.min(1, this._interpElapsed / this._interpDuration) : 1;
+      const lerp = (a, b) => a + (b - a) * alpha;
+      const from = this._interpFrom;
+      const to = this._interpTo;
+      const angleDiff = Math.atan2(Math.sin(to.headAngle - from.headAngle), Math.cos(to.headAngle - from.headAngle));
+
+      const leftCircles = [0, 1, 2].map((i) => [
+        lerp(from.leftCircles[i][0], to.leftCircles[i][0]),
+        lerp(from.leftCircles[i][1], to.leftCircles[i][1]),
+        lerp(from.leftCircles[i][2], to.leftCircles[i][2])
+      ]);
+      const rightCircles = [0, 1, 2].map((i) => [
+        lerp(from.rightCircles[i][0], to.rightCircles[i][0]),
+        lerp(from.rightCircles[i][1], to.rightCircles[i][1]),
+        lerp(from.rightCircles[i][2], to.rightCircles[i][2])
+      ]);
+
+      this.applySnapshotStateImmediate({
+        introProgress: lerp(from.introProgress, to.introProgress),
+        bodyOffsetY: lerp(from.bodyOffsetY, to.bodyOffsetY),
+        headThrustOffsetY: lerp(from.headThrustOffsetY, to.headThrustOffsetY),
+        headAngle: from.headAngle + angleDiff * alpha,
+        leftCircles,
+        rightCircles
+      });
+    }
+
+    for (const arm of [this.leftArm, this.rightArm]) {
+      if (arm.blinking) {
+        arm.blinkTimer = (arm.blinkTimer || 0) + dt;
+      }
+    }
+
+    if (this.phase === 'defeated' || this.isDefeated()) {
+      this.phase = 'defeated';
+      this.defeatVibClock = (this.defeatVibClock || 0) + dt;
+      this.updateDefeatVibration();
+      this.updateGeometry();
+    } else {
+      this.headShakeX = 0;
+      this.headShakeY = 0;
+    }
+  }
+
+  applySnapshot(data, interpDuration = null) {
     if (!Array.isArray(data)) return;
     const [
       phase,
@@ -934,44 +1167,48 @@ class BigfootBoss {
 
     this.phase = phase || 'cooldown';
     this.phaseTimer = phaseTimer || 0;
-    this.introProgress = introProgress !== undefined ? introProgress : 1;
-    this.introOffsetY = -(1 - (1 - Math.pow(1 - ColorUtils.clamp(this.introProgress, 0, 1), 3))) * 235;
-    this.bodyOffsetY = bodyOffsetY || 0;
-    this.headThrustOffsetY = headThrustOffsetY || 0;
-    this.headAngle = headAngle || 0;
-
     this.head.hp = headHp;
     this.head.maxHp = headMaxHp;
-    const verts = this.getHeadVertices();
-    this.head.x = verts[2].x;
-    this.head.y = verts[2].y;
-    this.head.angle = this.headAngle;
 
+    const wasLeftBlink = this.leftArm.blinking;
     this.leftArm.hp = leftHp;
     this.leftArm.maxHp = leftMaxHp;
     this.leftArm.blinking = !!leftBlink;
-    this.leftArm.blinkTimer = leftBlinkTimer || 0;
-    if (Array.isArray(leftCircles)) {
-      for (let i = 0; i < 3 && i < leftCircles.length; i++) {
-        this.leftArm.circles[i].x = leftCircles[i][0];
-        this.leftArm.circles[i].y = leftCircles[i][1];
-        this.leftArm.circles[i].r = leftCircles[i][2];
-        this.leftArm.circles[i].radius = leftCircles[i][2];
-      }
+    if (!this.leftArm.blinking || !wasLeftBlink || interpDuration === null) {
+      this.leftArm.blinkTimer = leftBlinkTimer || 0;
     }
 
+    const wasRightBlink = this.rightArm.blinking;
     this.rightArm.hp = rightHp;
     this.rightArm.maxHp = rightMaxHp;
     this.rightArm.blinking = !!rightBlink;
-    this.rightArm.blinkTimer = rightBlinkTimer || 0;
-    if (Array.isArray(rightCircles)) {
-      for (let i = 0; i < 3 && i < rightCircles.length; i++) {
-        this.rightArm.circles[i].x = rightCircles[i][0];
-        this.rightArm.circles[i].y = rightCircles[i][1];
-        this.rightArm.circles[i].r = rightCircles[i][2];
-        this.rightArm.circles[i].radius = rightCircles[i][2];
-      }
+    if (!this.rightArm.blinking || !wasRightBlink || interpDuration === null) {
+      this.rightArm.blinkTimer = rightBlinkTimer || 0;
     }
+
+    const targetState = {
+      introProgress: introProgress !== undefined ? introProgress : 1,
+      bodyOffsetY: bodyOffsetY || 0,
+      headThrustOffsetY: headThrustOffsetY || 0,
+      headAngle: headAngle || 0,
+      leftCircles: [0, 1, 2].map((i) => (Array.isArray(leftCircles) && leftCircles[i]) ? leftCircles[i] : [this.leftArm.circles[i].x, this.leftArm.circles[i].y, this.leftArm.circles[i].r]),
+      rightCircles: [0, 1, 2].map((i) => (Array.isArray(rightCircles) && rightCircles[i]) ? rightCircles[i] : [this.rightArm.circles[i].x, this.rightArm.circles[i].y, this.rightArm.circles[i].r])
+    };
+
+    if (!this._hasSnapInterp || !(interpDuration > 0)) {
+      this._hasSnapInterp = true;
+      this.applySnapshotStateImmediate(targetState);
+      this._interpFrom = this.captureInterpState();
+      this._interpTo = this.captureInterpState();
+      this._interpElapsed = 1;
+      this._interpDuration = interpDuration || 0.042;
+      return;
+    }
+
+    this._interpFrom = this.captureInterpState();
+    this._interpTo = targetState;
+    this._interpElapsed = 0;
+    this._interpDuration = interpDuration;
   }
 }
 

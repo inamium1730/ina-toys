@@ -48,6 +48,7 @@ const GAME_CONFIG = {
   },
 
   ENEMY: {
+    VISUAL_SCALE: 1.5,           // すべての敵の見た目を1.5倍
     BULLET_VISUAL_RADIUS: 6.5,   // 見た目は少し大きめの丸形 (当たり判定は1px)
     BLINK_CYCLE: 0.5             // 0.5秒サイクルで赤→白点滅
   },
@@ -73,9 +74,15 @@ const GAME_CONFIG = {
     MAX_PLAYERS: 4,
     HP_BY_PLAYER_COUNT: {
       1: 8,
-      2: 6,
-      3: 4,
-      4: 3
+      2: 7,
+      3: 6,
+      4: 5
+    },
+    WIDTH_SCALE_BY_PLAYER_COUNT: {
+      1: 1.0,
+      2: 0.85,
+      3: 0.7,
+      4: 0.55
     }
   }
 };
