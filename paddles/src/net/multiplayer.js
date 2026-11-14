@@ -1174,6 +1174,7 @@ class MultiplayerManager {
     this.joinRetryTimer = null;
     this.joinTimeoutTimer = null;
     this.joinNotFoundDeadline = 0;
+    this.joinDeadlineAt = 0;
     this.hostAliveTimer = null;
     this.lastMetricsSentAt = 0;
 
@@ -1520,6 +1521,7 @@ class MultiplayerManager {
     this.handoffSilent = false;
     this.resetSelfNetStats();
     this.joinSessionToken = MultiplayerManager.randomId(8);
+    this.joinDeadlineAt = Date.now() + MultiplayerManager.JOIN_NOT_FOUND_TIMEOUT_MS;
     this.players = [
       this.makeLocalPlayerEntry(0, false)
     ];
@@ -1527,6 +1529,20 @@ class MultiplayerManager {
     this.openSignaling(cleanCode);
     this.sendJoinRequest();
 
+    this.startJoinRetryLoop(800, false);
+
+    // 招待リンク接続時はシグナリング確立やホスト応答の遅延を考慮して十分な待機時間(20秒)を確保する
+    this.clearJoinNotFoundTimeout();
+    this.scheduleNotFoundFallback(MultiplayerManager.JOIN_NOT_FOUND_TIMEOUT_MS);
+
+    this.notifyRoomChange();
+  }
+
+  startJoinRetryLoop(intervalMs = 800, isMigration = false) {
+    if (this.joinRetryTimer) {
+      clearInterval(this.joinRetryTimer);
+      this.joinRetryTimer = null;
+    }
     this.joinRetryTimer = setInterval(() => {
       if (this.mode !== 'guest' || this.connectionStatus === 'connected' || this.connectionStatus === 'full') {
         clearInterval(this.joinRetryTimer);
@@ -1534,15 +1550,9 @@ class MultiplayerManager {
         return;
       }
       if (!this.hostPeer || !this.hostPeer.hasOffer) {
-        this.sendJoinRequest();
+        this.sendJoinRequest(isMigration);
       }
-    }, 800);
-
-    // 招待リンク接続時はシグナリング確立やホスト応答の遅延を考慮して十分な待機時間(20秒)を確保する
-    this.clearJoinNotFoundTimeout();
-    this.scheduleNotFoundFallback(MultiplayerManager.JOIN_NOT_FOUND_TIMEOUT_MS);
-
-    this.notifyRoomChange();
+    }, intervalMs);
   }
 
   clearJoinNotFoundTimeout() {
@@ -1645,6 +1655,7 @@ class MultiplayerManager {
       this.joinRetryTimer = null;
     }
     this.clearJoinNotFoundTimeout();
+    this.joinDeadlineAt = 0;
     if (this.hostAliveTimer) {
       clearInterval(this.hostAliveTimer);
       this.hostAliveTimer = null;
@@ -1672,10 +1683,24 @@ class MultiplayerManager {
   closePeerResources(peer) {
     if (!peer) return;
     if (peer.pingTimer) clearInterval(peer.pingTimer);
-    if (peer.disconnectTimer) clearTimeout(peer.disconnectTimer);
-    try { if (peer.ctrlDc) peer.ctrlDc.close(); } catch (_) {}
-    try { if (peer.syncDc) peer.syncDc.close(); } catch (_) {}
-    try { if (peer.pc) peer.pc.close(); } catch (_) {}
+    if (peer.disconnectTimer) {
+      clearTimeout(peer.disconnectTimer);
+      peer.disconnectTimer = null;
+    }
+    for (const dc of [peer.ctrlDc, peer.syncDc]) {
+      if (!dc) continue;
+      dc.onopen = null;
+      dc.onmessage = null;
+      dc.onclose = null;
+      dc.onerror = null;
+      try { dc.close(); } catch (_) {}
+    }
+    if (peer.pc) {
+      peer.pc.onconnectionstatechange = null;
+      peer.pc.onicecandidate = null;
+      peer.pc.ondatachannel = null;
+      try { peer.pc.close(); } catch (_) {}
+    }
   }
 
   getOpenGuestCount() {
@@ -2276,9 +2301,12 @@ class MultiplayerManager {
 
   evaluateLobbyBestHost() {
     if (this.mode !== 'host' || this.isInGame || this.migrating || this.lobbyHandoffInProgress) return;
-    if (Date.now() - this.lastLobbyHandoffAt < 6000) return;
+    if (Date.now() - this.lastLobbyHandoffAt < 10000) return;
 
-    const connected = Array.from(this.peers.values()).filter((p) => p.connected);
+    const allPeers = Array.from(this.peers.values());
+    // 誰かがまさに接続確立途中(!connected)のときはホスト交代を発動せず、全員の接続完了を待つ
+    if (allPeers.some((p) => !p.connected)) return;
+    const connected = allPeers;
     if (connected.length === 0) return;
 
     const hostSelf = this.getSelfNetStats();
@@ -2336,7 +2364,7 @@ class MultiplayerManager {
       if (this.mode === 'host' && !this.isInGame) {
         this.demoteToGuestForLobbyHandoff(newHostPeer.peerId, ownerPeerId, roster, survOrder);
       }
-    }, 35);
+    }, 180);
   }
 
   computeMigrationOrder() {
@@ -2548,7 +2576,7 @@ class MultiplayerManager {
             if (this.peers.get(guestPeerId) === peer && pc.connectionState !== 'connected') {
               this.removePeer(guestPeerId);
             }
-          }, 4500);
+          }, MultiplayerManager.PEER_DISCONNECT_GRACE_MS);
         }
       } else if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
         if (this.peers.get(guestPeerId) === peer) {
@@ -2626,11 +2654,12 @@ class MultiplayerManager {
   removePeer(guestPeerId) {
     const peer = this.peers.get(guestPeerId);
     if (!peer) return;
+    const wasConnected = !!peer.connected;
     this.peers.delete(guestPeerId);
     this.remoteInputs.delete(peer.slot);
     this.closePeerResources(peer);
 
-    if (this.mode === 'host') {
+    if (this.mode === 'host' && wasConnected) {
       this.rebuildHostPlayersList();
       this.broadcastCtrl({
         type: 'room_state',
@@ -2701,7 +2730,7 @@ class MultiplayerManager {
         this.sendJoinRequest(this.reconnectingFromMigration);
       }
     } else if (type === 'lobby_handoff') {
-      if (from === this.hostPeerId && !this.isInGame) {
+      if (!this.isInGame && (from === this.hostPeerId || this.migrating || this.lobbyHandoffInProgress)) {
         this.handleLobbyHandoffMessage(payload);
       }
     } else if (type === 'host_migrate') {
@@ -2709,7 +2738,17 @@ class MultiplayerManager {
         this.beginGuestHostMigration(payload.newHostPeerId, payload.migrationOrder);
       }
     } else if (type === 'host_migrate_announce') {
-      if (from !== this.localPeerId && (this.migrating || (this.connectionStatus === 'connecting' && this.reconnectingFromMigration))) {
+      const alreadyTrackingHost = this.hostPeerId === from && (
+        this.reconnectingFromMigration ||
+        this.lobbyHandoffInProgress ||
+        this.connectionStatus === 'connected' ||
+        (this.hostPeer && this.hostPeer.hasOffer)
+      );
+      if (
+        from !== this.localPeerId &&
+        !alreadyTrackingHost &&
+        (this.migrating || (this.connectionStatus === 'connecting' && (this.reconnectingFromMigration || this.lobbyHandoffInProgress)))
+      ) {
         this.onDiscoveredNewHost(from);
       }
     } else if (type === 'room_full') {
@@ -2781,12 +2820,6 @@ class MultiplayerManager {
       if (dc.label === 'ctrl') {
         hostPeer.ctrlDc = dc;
         dc.onopen = () => {
-          this.connectionStatus = 'connected';
-          this.statusDetail = '';
-          this.reconnectingFromMigration = false;
-          this.migrating = false;
-          this.lobbyHandoffInProgress = false;
-          this.handoffSilent = false;
           if (this.joinRetryTimer) {
             clearInterval(this.joinRetryTimer);
             this.joinRetryTimer = null;
@@ -2911,7 +2944,7 @@ class MultiplayerManager {
             if (this.mode === 'guest' && this.hostPeer === hostPeer && pc.connectionState !== 'connected') {
               this.handleHostDisconnect();
             }
-          }, 4500);
+          }, MultiplayerManager.PEER_DISCONNECT_GRACE_MS);
         }
       } else if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
         if (this.mode === 'guest' && this.hostPeer === hostPeer) {
@@ -2947,6 +2980,13 @@ class MultiplayerManager {
   handleGuestCtrlMessage(msg) {
     if (!msg || !msg.type) return;
     if (msg.type === 'welcome') {
+      this.connectionStatus = 'connected';
+      this.statusDetail = '';
+      this.reconnectingFromMigration = false;
+      this.migrating = false;
+      this.lobbyHandoffInProgress = false;
+      this.handoffSilent = false;
+      this.joinDeadlineAt = 0;
       this.assignedSlot = msg.assignedSlot;
       if (msg.inGame !== undefined) {
         this.isInGame = !!msg.inGame;
@@ -3011,6 +3051,10 @@ class MultiplayerManager {
     this.clockOffsetMs = currentServerMs - MultiplayerManager.nowPerf();
     this.guestMinRttMs = Infinity;
 
+    this.clearMigrationTimers();
+    this.clearJoinNotFoundTimeout();
+    this.joinDeadlineAt = 0;
+
     if (this.hostAliveTimer) {
       clearInterval(this.hostAliveTimer);
       this.hostAliveTimer = null;
@@ -3036,6 +3080,7 @@ class MultiplayerManager {
     this.reconnectingFromMigration = true;
     this.connectionStatus = 'connecting';
     this.statusDetail = '';
+    this.joinSessionToken = MultiplayerManager.randomId(8);
     if (Array.isArray(survOrder)) {
       this.migrationOrder = survOrder;
     }
@@ -3051,23 +3096,17 @@ class MultiplayerManager {
         this.sendJoinRequest(true);
       }
     }, 45);
-    this.joinRetryTimer = setInterval(() => {
-      if (this.mode !== 'guest' || this.connectionStatus === 'connected' || this.connectionStatus === 'full') {
-        clearInterval(this.joinRetryTimer);
-        this.joinRetryTimer = null;
-        return;
-      }
-      if (!this.hostPeer || !this.hostPeer.hasOffer) {
-        this.sendJoinRequest(true);
-      }
-    }, 350);
+    this.startJoinRetryLoop(350, true);
 
     this.notifyRoomChange();
   }
 
   handleGuestLobbyHandoff(msg) {
     if (this.mode !== 'guest' || this.isInGame) return;
+    this.clearMigrationTimers();
     this.closeHostPeerOnly();
+    this.joinDeadlineAt = 0;
+    this.joinSessionToken = MultiplayerManager.randomId(8);
     this.hostPeerId = msg.newHostPeerId;
     this.lobbyHandoffInProgress = true;
     this.handoffSilent = true;
@@ -3089,16 +3128,7 @@ class MultiplayerManager {
         this.sendJoinRequest(true);
       }
     }, 45);
-    this.joinRetryTimer = setInterval(() => {
-      if (this.mode !== 'guest' || this.connectionStatus === 'connected' || this.connectionStatus === 'full') {
-        clearInterval(this.joinRetryTimer);
-        this.joinRetryTimer = null;
-        return;
-      }
-      if (!this.hostPeer || !this.hostPeer.hasOffer) {
-        this.sendJoinRequest(true);
-      }
-    }, 350);
+    this.startJoinRetryLoop(350, true);
 
     this.notifyRoomChange();
   }
@@ -3126,7 +3156,7 @@ class MultiplayerManager {
     this.peers.clear();
     this.remoteInputs.clear();
     this.migratingExpectedSlots.clear();
-    this.migratingGraceUntil = Date.now() + 9000;
+    this.migratingGraceUntil = Date.now() + 18000;
 
     const roster = Array.isArray(msg.players) ? msg.players : this.players;
     for (const sp of roster) {
@@ -3176,7 +3206,7 @@ class MultiplayerManager {
         });
         this.notifyRoomChange();
       }
-    }, 7500);
+    }, 16000);
     this.migratingCleanupTimers.push(cleanupTimer);
 
     this.notifyRoomChange();
@@ -3235,13 +3265,27 @@ class MultiplayerManager {
   }
 
   handleHostDisconnect() {
-    if (this.mode !== 'guest' || this.migrating) return;
+    if (this.mode !== 'guest' || this.migrating || this.lobbyHandoffInProgress) return;
     const oldHostEntry = this.players.find((p) => p.isHost || p.peerId === this.hostPeerId);
     const oldHostId = oldHostEntry ? oldHostEntry.peerId : this.hostPeerId;
     const surviving = this.players.filter((p) => !p.isHost && p.peerId !== oldHostId);
-    const hasBeenWelcomed = surviving.some((p) => p.peerId === this.localPeerId);
+    const hasBeenWelcomed = !!oldHostEntry && surviving.some((p) => p.peerId === this.localPeerId);
 
     if (!hasBeenWelcomed || !this.roomCode) {
+      // ロビー参加途中のWebRTC失敗・ホスト交代入れ違いは全体タイムアウト内なら即切断せず再試行する
+      if (!this.isInGame && this.roomCode && this.joinDeadlineAt > Date.now()) {
+        const remaining = this.joinDeadlineAt - Date.now();
+        this.closeHostPeerOnly();
+        this.hostPeerId = null;
+        this.connectionStatus = 'connecting';
+        this.statusDetail = '';
+        this.joinSessionToken = MultiplayerManager.randomId(8);
+        this.sendJoinRequest(false);
+        this.startJoinRetryLoop(800, false);
+        this.scheduleNotFoundFallback(remaining);
+        this.notifyRoomChange();
+        return;
+      }
       this.finalizeHostGoneDisconnect();
       return;
     }
@@ -3293,21 +3337,29 @@ class MultiplayerManager {
     }
 
     if (myRank === 0) {
-      this.promoteToHost(oldHostSlot, survivingPlayers);
-      return;
+      if (this.isInGame) {
+        this.promoteToHost(oldHostSlot, survivingPlayers);
+        return;
+      }
+      // ロビー中は直後のlobby_handoffや他アナウンスとのレースを避けるためごく短時間待機してから昇格する
+      const lobbyPromoTimer = setTimeout(() => {
+        if (!this.migrating || this.mode !== 'guest') return;
+        this.promoteToHost(oldHostSlot, survivingPlayers);
+      }, 300);
+      this.migrationTimers.push(lobbyPromoTimer);
+    } else {
+      const promoTimer = setTimeout(() => {
+        if (!this.migrating || this.mode !== 'guest') return;
+        this.promoteToHost(oldHostSlot, survivingPlayers);
+      }, myRank * 2400 + (!this.isInGame ? 300 : 0));
+      this.migrationTimers.push(promoTimer);
     }
-
-    const promoTimer = setTimeout(() => {
-      if (!this.migrating || this.mode !== 'guest') return;
-      this.promoteToHost(oldHostSlot, survivingPlayers);
-    }, myRank * 2400);
-    this.migrationTimers.push(promoTimer);
 
     const failTimer = setTimeout(() => {
       if (this.migrating && this.mode === 'guest') {
         this.finalizeHostGoneDisconnect();
       }
-    }, ordered.length * 2400 + 6000);
+    }, ordered.length * 2400 + 8000);
     this.migrationTimers.push(failTimer);
 
     this.notifyRoomChange();
@@ -3315,24 +3367,27 @@ class MultiplayerManager {
 
   onDiscoveredNewHost(newHostPeerId) {
     if (this.mode !== 'guest') return;
+    if (
+      this.hostPeerId === newHostPeerId &&
+      (this.reconnectingFromMigration ||
+        this.lobbyHandoffInProgress ||
+        this.connectionStatus === 'connected' ||
+        (this.hostPeer && this.hostPeer.hasOffer))
+    ) {
+      return;
+    }
     this.clearMigrationTimers();
+    this.closeHostPeerOnly();
+    this.joinDeadlineAt = 0;
     this.hostPeerId = newHostPeerId;
     this.reconnectingFromMigration = true;
+    this.lobbyHandoffInProgress = false;
     this.connectionStatus = 'connecting';
     this.statusDetail = '';
+    this.joinSessionToken = MultiplayerManager.randomId(8);
     this.sendJoinRequest(true);
 
-    if (this.joinRetryTimer) clearInterval(this.joinRetryTimer);
-    this.joinRetryTimer = setInterval(() => {
-      if (this.mode !== 'guest' || this.connectionStatus === 'connected' || this.connectionStatus === 'full') {
-        clearInterval(this.joinRetryTimer);
-        this.joinRetryTimer = null;
-        return;
-      }
-      if (!this.hostPeer || !this.hostPeer.hasOffer) {
-        this.sendJoinRequest(true);
-      }
-    }, 1000);
+    this.startJoinRetryLoop(450, true);
 
     this.notifyRoomChange();
   }
@@ -3514,6 +3569,7 @@ class MultiplayerManager {
 }
 
 MultiplayerManager.JOIN_NOT_FOUND_TIMEOUT_MS = 20000;
+MultiplayerManager.PEER_DISCONNECT_GRACE_MS = 12000;
 
 MultiplayerManager.RTC_CONFIG = {
   iceServers: [
