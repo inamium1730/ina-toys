@@ -396,12 +396,12 @@ const MAPS = [
     spawn_interval: 7.5,
     spawn_limit: 7
   },
-  {
-    identifier: 30,
-    name: 'cloud',
-    map: 'boss',
-    enemies: ['arrow', 'wide_arrow', 'sparkle', 'scissors'],
-    spawn_interval: null,
-    spawn_limit: 7
-  }
+  // {
+  //   identifier: 30,
+  //   name: 'cloud',
+  //   map: 'boss',
+  //   enemies: ['arrow', 'wide_arrow', 'sparkle', 'scissors'],
+  //   spawn_interval: null,
+  //   spawn_limit: 7
+  // }
 ];
