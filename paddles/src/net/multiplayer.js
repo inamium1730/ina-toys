@@ -655,9 +655,11 @@ class NetProto {
         w.ang16(angle);
         w.u10(speed);
         w.u8(b.damage || 1);
+        const hasCustomExplode = Boolean(b.explodeCount && b.explodeCount !== 8);
         const flags = (b.shape === 'spade' ? 1 : 0)
           | ((b.explodeCount === 8) ? 2 : 0)
-          | (b.homingMode === 'decel' ? 4 : 0);
+          | (b.homingMode === 'decel' ? 4 : 0)
+          | (hasCustomExplode ? 8 : 0);
         w.u8(flags);
         if (flags & 1) {
           w.u10(b.explodeY || 0);
@@ -665,6 +667,9 @@ class NetProto {
         if (flags & 4) {
           w.ms16(b.decelDuration || 0.4);
           w.ms16(b.waitTarget || 1.0);
+        }
+        if (flags & 8) {
+          w.u8(Math.min(255, Math.max(1, b.explodeCount)));
         }
       }
     } else if (evt.op === 1) {
@@ -703,10 +708,13 @@ class NetProto {
         const flags = r.pos < r.dv.byteLength ? r.u8() : 0;
         const shape = (flags & 1) ? 'spade' : undefined;
         const explodeY = (flags & 1) && r.pos + 2 <= r.dv.byteLength ? r.u10() : undefined;
-        const explodeCount = (flags & 2) ? 8 : undefined;
+        let explodeCount = (flags & 2) ? 8 : undefined;
         const isDecel = Boolean(flags & 4);
         const decelDuration = isDecel && r.pos + 2 <= r.dv.byteLength ? r.ms16() : undefined;
         const waitTarget = isDecel && r.pos + 2 <= r.dv.byteLength ? r.ms16() : undefined;
+        if ((flags & 8) && r.pos < r.dv.byteLength) {
+          explodeCount = r.u8();
+        }
         const vx = Math.cos(angle) * speed;
         const vy = Math.sin(angle) * speed;
         bullets[i] = {
@@ -1530,9 +1538,9 @@ class MultiplayerManager {
       }
     }, 800);
 
-    // 招待リンク接続時にルームが見つからない場合は速やかにソロモードへ切り替える
+    // 招待リンク接続時はシグナリング確立やホスト応答の遅延を考慮して十分な待機時間(20秒)を確保する
     this.clearJoinNotFoundTimeout();
-    this.scheduleNotFoundFallback(2500);
+    this.scheduleNotFoundFallback(MultiplayerManager.JOIN_NOT_FOUND_TIMEOUT_MS);
 
     this.notifyRoomChange();
   }
@@ -1922,9 +1930,6 @@ class MultiplayerManager {
               }
             } else if (this.mode === 'guest' && this.connectionStatus === 'connecting') {
               this.sendJoinRequest(this.reconnectingFromMigration);
-              if (!this.reconnectingFromMigration && (!this.hostPeer || !this.hostPeer.hasOffer)) {
-                this.scheduleNotFoundFallback(1200);
-              }
             }
           } else if (pkt.type === 13) {
             // PINGRESP -> ロビー回線RTTサンプル記録
@@ -1983,7 +1988,7 @@ class MultiplayerManager {
   flushSigQueueToClient(client) {
     if (!client.ready || !client.ws || client.ws.readyState !== WebSocket.OPEN) return;
     const now = Date.now();
-    this.sigQueue = this.sigQueue.filter((item) => now - item.ts < 8000);
+    this.sigQueue = this.sigQueue.filter((item) => now - item.ts < MultiplayerManager.JOIN_NOT_FOUND_TIMEOUT_MS);
     for (const item of this.sigQueue) {
       try {
         client.ws.send(MqttLite.encodePublish(client.topic, item.json));
@@ -2082,6 +2087,21 @@ class MultiplayerManager {
             players: this.serializePlayers(),
             mo: this.migrationOrder
           });
+        } else if (!existing.connected && existing.lastOfferSdp && Date.now() - (existing.lastOfferSentAt || 0) >= 800) {
+          // ゲストがリトライを送ってきた＝初回Offer未着の可能性があるためOffer・ICEを再送
+          existing.lastOfferSentAt = Date.now();
+          this.sendSignal('webrtc_offer', from, {
+            connEpoch: existing.connEpoch,
+            sdp: existing.lastOfferSdp
+          });
+          if (Array.isArray(existing.localIceCandidates)) {
+            for (const cand of existing.localIceCandidates) {
+              this.sendSignal('ice_cand', from, {
+                connEpoch: existing.connEpoch,
+                candidate: cand
+              });
+            }
+          }
         }
         return;
       }
@@ -2399,6 +2419,9 @@ class MultiplayerManager {
       connected: false,
       remoteDescSet: false,
       pendingIce: [],
+      localIceCandidates: [],
+      lastOfferSdp: null,
+      lastOfferSentAt: 0,
       lastInputSeq: -1,
       pingTimer: null
     };
@@ -2504,9 +2527,11 @@ class MultiplayerManager {
 
     pc.onicecandidate = (ev) => {
       if (ev.candidate) {
+        const cand = ev.candidate.toJSON ? ev.candidate.toJSON() : ev.candidate;
+        peer.localIceCandidates.push(cand);
         this.sendSignal('ice_cand', guestPeerId, {
           connEpoch,
-          candidate: ev.candidate.toJSON ? ev.candidate.toJSON() : ev.candidate
+          candidate: cand
         });
       }
     };
@@ -2535,9 +2560,12 @@ class MultiplayerManager {
     pc.createOffer()
       .then((offer) => pc.setLocalDescription(offer))
       .then(() => {
+        const sdpObj = pc.localDescription.toJSON ? pc.localDescription.toJSON() : pc.localDescription;
+        peer.lastOfferSdp = sdpObj;
+        peer.lastOfferSentAt = Date.now();
         this.sendSignal('webrtc_offer', guestPeerId, {
           connEpoch,
-          sdp: pc.localDescription.toJSON ? pc.localDescription.toJSON() : pc.localDescription
+          sdp: sdpObj
         });
       })
       .catch(() => {
@@ -3484,6 +3512,8 @@ class MultiplayerManager {
     }
   }
 }
+
+MultiplayerManager.JOIN_NOT_FOUND_TIMEOUT_MS = 20000;
 
 MultiplayerManager.RTC_CONFIG = {
   iceServers: [
