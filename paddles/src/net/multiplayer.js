@@ -191,13 +191,17 @@ class NetProto {
     return NetProto.toView(data).getUint8(0);
   }
 
-  static encodeInput(seq, left, right, pointerX) {
+  static encodeInput(seq, left, right, pointerX, clientX) {
     const w = new _BinWriter(8);
     const hasPtr = typeof pointerX === 'number' && !Number.isNaN(pointerX);
+    const hasClientX = typeof clientX === 'number' && !Number.isNaN(clientX);
     w.u8(NetProto.PT_INPUT);
     w.u16(seq & 0xffff);
-    w.u8((left ? 1 : 0) | (right ? 2 : 0) | (hasPtr ? 4 : 0));
+    w.u8((left ? 1 : 0) | (right ? 2 : 0) | (hasPtr ? 4 : 0) | (hasClientX ? 8 : 0));
     w.c10(hasPtr ? pointerX : 0);
+    if (hasClientX) {
+      w.c10(clientX);
+    }
     return w.finish();
   }
 
@@ -207,12 +211,15 @@ class NetProto {
     const seq = r.u16();
     const flags = r.u8();
     const ptr = r.c10();
+    const hasClientX = (flags & 8) !== 0 && r.pos + 2 <= r.u8a.length;
+    const clientX = hasClientX ? r.c10() : null;
     return {
       type: 'input',
       seq,
       left: (flags & 1) !== 0,
       right: (flags & 2) !== 0,
-      pointerX: (flags & 4) !== 0 ? ptr : null
+      pointerX: (flags & 4) !== 0 ? ptr : null,
+      x: clientX
     };
   }
 
@@ -2408,11 +2415,15 @@ class MultiplayerManager {
     const diff = ((seq - peer.lastInputSeq) << 16) >> 16;
     if (peer.lastInputSeq < 0 || diff > 0) {
       peer.lastInputSeq = seq;
+      const hasX = typeof msg.x === 'number' && Number.isFinite(msg.x);
       this.remoteInputs.set(peer.slot, {
         seq,
         left: !!msg.left,
         right: !!msg.right,
-        pointerX: typeof msg.pointerX === 'number' ? msg.pointerX : null
+        pointerX: typeof msg.pointerX === 'number' ? msg.pointerX : null,
+        x: hasX ? msg.x : null,
+        hasClientX: hasX,
+        receivedAtMs: MultiplayerManager.nowPerf()
       });
     }
   }
@@ -3540,9 +3551,12 @@ class MultiplayerManager {
     } catch (_) {}
   }
 
-  sendToHostInput(seq, inputState) {
+  sendToHostInput(seq, inputState, clientX = null) {
     if (this.mode !== 'guest' || !this.hostPeer) return;
-    const pkt = NetProto.encodeInput(seq & 0xffff, !!inputState.left, !!inputState.right, inputState.pointerX);
+    const resolvedX = typeof clientX === 'number'
+      ? clientX
+      : (inputState && typeof inputState.x === 'number' ? inputState.x : null);
+    const pkt = NetProto.encodeInput(seq & 0xffff, !!inputState.left, !!inputState.right, inputState.pointerX, resolvedX);
     const dc = (this.hostPeer.syncDc && this.hostPeer.syncDc.readyState === 'open')
       ? this.hostPeer.syncDc
       : this.hostPeer.ctrlDc;

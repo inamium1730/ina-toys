@@ -2450,12 +2450,13 @@
       }
     }
 
-    // パドル同期 (自パドルは未確認入力をリプレイして予測補正、他パドルは線形補間で滑らかに接続)
+    // パドル同期 (自パドルはローカル座標を優先維持してテレポートを防ぎ、他パドルは線形補間で滑らかに接続)
     const nextPaddles = [];
     const totalCount = Math.max(1, snap.ps.length);
     for (const row of snap.ps) {
       const [slot, x, hp, maxHp, cw, clk, cyan, yellow, green, nickRaw, contestedCnt, regenTime, invTimer, ackSeq, respawnTimer, respawnPenalty] = row;
       let p = game.paddles.find((item) => item.slot === slot);
+      const existed = Boolean(p);
       const nick = nickRaw !== null && nickRaw !== undefined
         ? nickRaw
         : ((mp.players.find((pl) => pl.slot === slot) || {}).nickname || (p ? p.nickname : ''));
@@ -2493,22 +2494,14 @@
           p.x = x;
           guestPendingInputs.length = 0;
         } else {
+          if (!existed) {
+            p.x = x;
+          }
+          const halfW = p.currentWidth / 2;
+          p.x = ColorUtils.clamp(p.x, halfW, WIDTH - halfW);
           const ack = ackSeq || 0;
           while (guestPendingInputs.length > 0 && (((guestPendingInputs[0].seq - ack) << 16) >> 16) <= 0) {
             guestPendingInputs.shift();
-          }
-          const savedX = p.x;
-          p.x = x;
-          for (const item of guestPendingInputs) {
-            p.moveHorizontal(item.dt, item);
-          }
-          const reconciledX = p.x;
-          p.x = savedX;
-          const err = reconciledX - p.x;
-          if (Math.abs(err) > 52) {
-            p.x = reconciledX;
-          } else {
-            p.x += err * 0.28;
           }
         }
       } else {
@@ -2588,25 +2581,6 @@
   function updateGuest(dt) {
     if (game.state === 'playing') {
       updateSkills(dt);
-      // 自分の入力をバイナリパケットでホストへ送信しつつ、リプレイバッファへ蓄積する
-      guestInputSendTimer += dt;
-      const inputKey = `${input.left ? 1 : 0}_${input.right ? 1 : 0}_${input.pointerX !== null ? Math.round(input.pointerX) : 'n'}`;
-      if (inputKey !== lastSentInputKey || guestInputSendTimer >= 0.02) {
-        lastSentInputKey = inputKey;
-        guestInputSendTimer = 0;
-        guestInputSeq = (guestInputSeq + 1) & 0xffff;
-        mp.sendToHostInput(guestInputSeq, input);
-      }
-      guestPendingInputs.push({
-        seq: guestInputSeq,
-        dt,
-        left: !!input.left,
-        right: !!input.right,
-        pointerX: input.pointerX
-      });
-      if (guestPendingInputs.length > 120) {
-        guestPendingInputs.shift();
-      }
 
       // パドルローカル予測（自機）＆線形補間（他プレイヤー）
       const isStageClearWarping = !!(game.remoteTransitionSnap && (
@@ -2637,6 +2611,27 @@
           stepLinearInterp(p, dt);
         }
         p.updateCosmeticEffects(dt, effectsManager);
+      }
+
+      // 自分の入力と自パドル現在座標をバイナリパケットでホストへ送信する
+      guestInputSendTimer += dt;
+      const localX = localPaddle && localPaddle.hp > 0 ? localPaddle.x : null;
+      const inputKey = `${input.left ? 1 : 0}_${input.right ? 1 : 0}_${input.pointerX !== null ? Math.round(input.pointerX) : 'n'}`;
+      if (inputKey !== lastSentInputKey || guestInputSendTimer >= 0.02) {
+        lastSentInputKey = inputKey;
+        guestInputSendTimer = 0;
+        guestInputSeq = (guestInputSeq + 1) & 0xffff;
+        mp.sendToHostInput(guestInputSeq, input, localX);
+      }
+      guestPendingInputs.push({
+        seq: guestInputSeq,
+        dt,
+        left: !!input.left,
+        right: !!input.right,
+        pointerX: input.pointerX
+      });
+      if (guestPendingInputs.length > 120) {
+        guestPendingInputs.shift();
       }
 
       // 紫色のサブパドル線形補間＆幅イージング
@@ -2830,10 +2825,22 @@
       if (ri && ri.seq !== undefined) {
         lastProcessedInputSeqBySlot.set(p.slot, ri.seq);
       }
+      const isFresh = ri && (ri.receivedAtMs === undefined || (MultiplayerManager.nowPerf() - ri.receivedAtMs) <= 140);
       const pInput = p.isLocal
         ? input
-        : (ri || { left: false, right: false, pointerX: null });
+        : (isFresh ? ri : { left: false, right: false, pointerX: null });
       p.update(dt, pInput, effectsManager);
+      if (!p.isLocal && ri && typeof ri.x === 'number' && Number.isFinite(ri.x)) {
+        const halfW = p.currentWidth / 2;
+        const targetClientX = ColorUtils.clamp(ri.x, halfW, WIDTH - halfW);
+        const diffX = targetClientX - p.x;
+        const maxCorrection = p.getSpeed() * dt * 0.85;
+        p.x = ColorUtils.clamp(
+          p.x + ColorUtils.clamp(diffX * Math.min(1, dt * 16), -maxCorrection, maxCorrection),
+          halfW,
+          WIDTH - halfW
+        );
+      }
     }
 
     // 2. 紫色のサブパドル更新
