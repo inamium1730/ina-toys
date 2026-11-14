@@ -669,20 +669,8 @@ class Ball {
 
       // ボスのダメージ有効部位とのヒットチェック
       if (!enemiesOnly && boss && !boss.isDefeated() && boss.introProgress >= 1) {
-        if (boss.areArmsAlive()) {
-          for (const arm of [boss.leftArm, boss.rightArm]) {
-            if (arm.hp <= 0) continue;
-            for (const c of arm.circles) {
-              if (Math.hypot(simX - c.x, simY - c.y) <= simRadius + c.r) {
-                return true;
-              }
-            }
-          }
-        } else {
-          const verts = boss.getHeadVertices();
-          if (boss.checkCircleTriangleCollision(simX, simY, simRadius, verts[0], verts[1], verts[2])) {
-            return true;
-          }
+        if (boss.hitsCircle && boss.hitsCircle(simX, simY, simRadius)) {
+          return true;
         }
       }
     }

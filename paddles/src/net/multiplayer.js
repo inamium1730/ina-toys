@@ -374,35 +374,59 @@ class NetProto {
 
     if (s.bo) {
       const bo = s.bo;
-      w.tagStr(NetProto.BOSS_PHASES, bo[0]);
-      w.ms16(bo[1]);
-      w.u16((bo[2] !== undefined ? bo[2] : 1) * 1000);
-      w.c10(bo[3]);
-      w.c10(bo[4]);
-      w.ang16(bo[5]);
-      w.u16(bo[6]);
-      w.u16(bo[7]);
-      w.u16(bo[8]);
-      w.u16(bo[9]);
-      w.u8(bo[10] ? 1 : 0);
-      w.ms16(bo[11]);
-      const lc = bo[12] || [];
-      for (let i = 0; i < 3; i++) {
-        const c = lc[i] || [0, 0, 0];
-        w.c10(c[0]);
-        w.c10(c[1]);
-        w.u10(c[2]);
-      }
-      w.u16(bo[13]);
-      w.u16(bo[14]);
-      w.u8(bo[15] ? 1 : 0);
-      w.ms16(bo[16]);
-      const rc = bo[17] || [];
-      for (let i = 0; i < 3; i++) {
-        const c = rc[i] || [0, 0, 0];
-        w.c10(c[0]);
-        w.c10(c[1]);
-        w.u10(c[2]);
+      const isSnake = bo[0] === 'snake';
+      w.u8(isSnake ? 1 : 0);
+      if (isSnake) {
+        w.tagStr(NetProto.BOSS_PHASES, bo[1]);
+        w.ms16(bo[2]);
+        w.u16((bo[3] !== undefined ? bo[3] : 1) * 1000);
+        w.u16(bo[4]);
+        w.u16(bo[5]);
+        w.u8(bo[6] ? 1 : 0);
+        w.ms16(bo[7]);
+        w.u16((bo[8] || 0) * 1000);
+        w.c10(bo[9]);
+        w.c10(bo[10]);
+        w.c10(bo[11]);
+        w.c10(bo[12]);
+        const segs = bo[13] || [];
+        w.u8(segs.length);
+        for (let i = 0; i < segs.length; i++) {
+          const pt = segs[i] || [0, -300];
+          w.c10(pt[0]);
+          w.c10(pt[1]);
+        }
+      } else {
+        w.tagStr(NetProto.BOSS_PHASES, bo[0]);
+        w.ms16(bo[1]);
+        w.u16((bo[2] !== undefined ? bo[2] : 1) * 1000);
+        w.c10(bo[3]);
+        w.c10(bo[4]);
+        w.ang16(bo[5]);
+        w.u16(bo[6]);
+        w.u16(bo[7]);
+        w.u16(bo[8]);
+        w.u16(bo[9]);
+        w.u8(bo[10] ? 1 : 0);
+        w.ms16(bo[11]);
+        const lc = bo[12] || [];
+        for (let i = 0; i < 3; i++) {
+          const c = lc[i] || [0, 0, 0];
+          w.c10(c[0]);
+          w.c10(c[1]);
+          w.u10(c[2]);
+        }
+        w.u16(bo[13]);
+        w.u16(bo[14]);
+        w.u8(bo[15] ? 1 : 0);
+        w.ms16(bo[16]);
+        const rc = bo[17] || [];
+        for (let i = 0; i < 3; i++) {
+          const c = rc[i] || [0, 0, 0];
+          w.c10(c[0]);
+          w.c10(c[1]);
+          w.u10(c[2]);
+        }
       }
     }
 
@@ -467,32 +491,59 @@ class NetProto {
 
     let bo = null;
     if (flags & 8) {
-      const phase = r.tagStr(NetProto.BOSS_PHASES);
-      const phaseTimer = r.ms16();
-      const introProgress = r.u16() / 1000;
-      const bodyOffsetY = r.c10();
-      const headThrustOffsetY = r.c10();
-      const headAngle = r.ang16();
-      const headHp = r.u16();
-      const headMaxHp = r.u16();
-      const lHp = r.u16();
-      const lMaxHp = r.u16();
-      const lBlink = r.u8();
-      const lBlinkTimer = r.ms16();
-      const lCircles = [];
-      for (let i = 0; i < 3; i++) lCircles.push([r.c10(), r.c10(), r.u10()]);
-      const rHp = r.u16();
-      const rMaxHp = r.u16();
-      const rBlink = r.u8();
-      const rBlinkTimer = r.ms16();
-      const rCircles = [];
-      for (let i = 0; i < 3; i++) rCircles.push([r.c10(), r.c10(), r.u10()]);
-      bo = [
-        phase, phaseTimer, introProgress, bodyOffsetY, headThrustOffsetY, headAngle,
-        headHp, headMaxHp,
-        lHp, lMaxHp, lBlink, lBlinkTimer, lCircles,
-        rHp, rMaxHp, rBlink, rBlinkTimer, rCircles
-      ];
+      const bossKind = r.u8();
+      if (bossKind === 1) {
+        const phase = r.tagStr(NetProto.BOSS_PHASES);
+        const phaseTimer = r.ms16();
+        const introProgress = r.u16() / 1000;
+        const hp = r.u16();
+        const maxHp = r.u16();
+        const blinking = r.u8();
+        const blinkTimer = r.ms16();
+        const tongueProgress = r.u16() / 1000;
+        const tongueStartX = r.c10();
+        const tongueStartY = r.c10();
+        const tongueTipX = r.c10();
+        const tongueTipY = r.c10();
+        const segCount = r.u8();
+        const segs = new Array(segCount);
+        for (let i = 0; i < segCount; i++) {
+          segs[i] = [r.c10(), r.c10()];
+        }
+        bo = [
+          'snake', phase, phaseTimer, introProgress,
+          hp, maxHp, blinking, blinkTimer,
+          tongueProgress, tongueStartX, tongueStartY, tongueTipX, tongueTipY,
+          segs
+        ];
+      } else {
+        const phase = r.tagStr(NetProto.BOSS_PHASES);
+        const phaseTimer = r.ms16();
+        const introProgress = r.u16() / 1000;
+        const bodyOffsetY = r.c10();
+        const headThrustOffsetY = r.c10();
+        const headAngle = r.ang16();
+        const headHp = r.u16();
+        const headMaxHp = r.u16();
+        const lHp = r.u16();
+        const lMaxHp = r.u16();
+        const lBlink = r.u8();
+        const lBlinkTimer = r.ms16();
+        const lCircles = [];
+        for (let i = 0; i < 3; i++) lCircles.push([r.c10(), r.c10(), r.u10()]);
+        const rHp = r.u16();
+        const rMaxHp = r.u16();
+        const rBlink = r.u8();
+        const rBlinkTimer = r.ms16();
+        const rCircles = [];
+        for (let i = 0; i < 3; i++) rCircles.push([r.c10(), r.c10(), r.u10()]);
+        bo = [
+          phase, phaseTimer, introProgress, bodyOffsetY, headThrustOffsetY, headAngle,
+          headHp, headMaxHp,
+          lHp, lMaxHp, lBlink, lBlinkTimer, lCircles,
+          rHp, rMaxHp, rBlink, rBlinkTimer, rCircles
+        ];
+      }
     }
 
     let sk = null;
@@ -604,10 +655,16 @@ class NetProto {
         w.ang16(angle);
         w.u10(speed);
         w.u8(b.damage || 1);
-        const flags = b.shape === 'spade' ? 1 : 0;
+        const flags = (b.shape === 'spade' ? 1 : 0)
+          | ((b.explodeCount === 8) ? 2 : 0)
+          | (b.homingMode === 'decel' ? 4 : 0);
         w.u8(flags);
         if (flags & 1) {
           w.u10(b.explodeY || 0);
+        }
+        if (flags & 4) {
+          w.ms16(b.decelDuration || 0.4);
+          w.ms16(b.waitTarget || 1.0);
         }
       }
     } else if (evt.op === 1) {
@@ -616,6 +673,13 @@ class NetProto {
       for (let i = 0; i < Math.min(255, ids.length); i++) {
         w.u32(ids[i]);
       }
+    } else if (evt.op === 3) {
+      w.u32(evt.id || 0);
+      w.c10(evt.x);
+      w.c10(evt.y);
+      w.ang16(evt.angle || 0);
+      w.u10(evt.accel || 520);
+      w.u10(evt.maxSpeed || 540);
     }
     return w.finish();
   }
@@ -639,17 +703,31 @@ class NetProto {
         const flags = r.pos < r.dv.byteLength ? r.u8() : 0;
         const shape = (flags & 1) ? 'spade' : undefined;
         const explodeY = (flags & 1) && r.pos + 2 <= r.dv.byteLength ? r.u10() : undefined;
+        const explodeCount = (flags & 2) ? 8 : undefined;
+        const isDecel = Boolean(flags & 4);
+        const decelDuration = isDecel && r.pos + 2 <= r.dv.byteLength ? r.ms16() : undefined;
+        const waitTarget = isDecel && r.pos + 2 <= r.dv.byteLength ? r.ms16() : undefined;
+        const vx = Math.cos(angle) * speed;
+        const vy = Math.sin(angle) * speed;
         bullets[i] = {
           id,
           x,
           y,
           angle,
           speed,
-          vx: Math.cos(angle) * speed,
-          vy: Math.sin(angle) * speed,
+          vx,
+          vy,
           damage,
           shape,
-          explodeY
+          explodeY,
+          explodeCount,
+          homingMode: isDecel ? 'decel' : undefined,
+          initVx: isDecel ? vx : undefined,
+          initVy: isDecel ? vy : undefined,
+          decelDuration,
+          waitTarget,
+          homingTimer: isDecel ? 0 : undefined,
+          waitAfterStop: isDecel ? 0 : undefined
         };
       }
       evt.bullets = bullets;
@@ -658,6 +736,13 @@ class NetProto {
       const ids = new Array(count);
       for (let i = 0; i < count; i++) ids[i] = r.u32();
       evt.ids = ids;
+    } else if (op === 3) {
+      evt.id = r.u32();
+      evt.x = r.c10();
+      evt.y = r.c10();
+      evt.angle = r.ang16();
+      evt.accel = r.u10();
+      evt.maxSpeed = r.u10();
     }
     return evt;
   }
@@ -1021,6 +1106,8 @@ NetProto.GAME_STATES = ['menu', 'playing', 'gameover', 'paused', 'victory'];
 NetProto.TRANS_PHASES = ['killing_enemies', 'skill_unlock', 'waiting_before_blocks', 'spawning_blocks', 'boss_siren', 'boss_intro', 'boss_defeat'];
 NetProto.BOSS_PHASES = [
   'cooldown', 'aim', 'charging', 'punch_strike', 'punch_retract',
+  'tongue_strike', 'tongue_retract', 'retract', 'hidden_wait',
+  'dive_peek', 'dive_strike', 'slither_telegraph', 'slither', 'reenter',
   'summon', 'spread_pull', 'spread_thrust', 'spread_recover', 'intro', 'defeated'
 ];
 NetProto.SKILL_KEYS = typeof SKILLS !== 'undefined' ? Object.keys(SKILLS) : ['swing'];

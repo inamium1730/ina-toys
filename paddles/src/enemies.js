@@ -68,7 +68,7 @@ const ENEMIES = {
     name: 'quadiamond', // ❖
     bullet_type: 'connect', // self_destruction同様に自分に当たり判定があり、 2体以上出現するとお互いの間にレーザーが接続される。 レーザーは1pxの線の被弾判定がある。
     movement_type: 'fall',
-    health: 1,
+    health: 2,
     damage: 1,
     fire_rate: 0 // connectでは使用されない
   },
@@ -76,7 +76,7 @@ const ENEMIES = {
     name: 'pickaxe', // ⛏
     bullet_type: 'self_destruction',
     movement_type: 'fall',
-    speed: 5, // fallの5倍の速度で下降
+    speed: 10, // fallの10倍の速度で下降
     health: 1,
     damage: 6,
     fire_rate: 0

@@ -797,7 +797,7 @@
           const stageData = MAPS[game.stageIndex % MAPS.length];
           if (phase === 'boss_siren' || phase === 'boss_intro') {
             if (phase === 'boss_intro' && !game.boss) {
-              game.boss = new BigfootBoss(stageData);
+              game.boss = createBossForStage(stageData);
             }
             game.transition = {
               phase,
@@ -1119,7 +1119,7 @@
   }
 
   function isBossStage(stageData) {
-    return Boolean(stageData && (stageData.map === 'boss' || stageData.name === 'bigfoot'));
+    return Boolean(stageData && (stageData.map === 'boss' || stageData.name === 'bigfoot' || stageData.name === 'snake'));
   }
 
   function buildStageBlocks(stageData, spawnedImmediately = true) {
@@ -1668,7 +1668,7 @@
       tr.timer += dt;
       if (tr.timer >= 2.4) {
         const nextStageData = MAPS[game.stageIndex % MAPS.length];
-        game.boss = new BigfootBoss(nextStageData);
+        game.boss = createBossForStage(nextStageData);
         game.boss.setIntroProgress(0);
         tr.phase = 'boss_intro';
         tr.timer = 0;
@@ -1679,7 +1679,7 @@
       const u = ColorUtils.clamp(tr.timer / introDuration, 0, 1);
       if (!game.boss) {
         const nextStageData = MAPS[game.stageIndex % MAPS.length];
-        game.boss = new BigfootBoss(nextStageData);
+        game.boss = createBossForStage(nextStageData);
       }
       game.boss.setIntroProgress(u);
       if (tr.timer >= introDuration) {
@@ -1958,6 +1958,9 @@
       return game.boss ? game.boss.head : null;
     }
     if (targetKind === 'boss_circle' && game.boss) {
+      if (game.boss.getCircleById) {
+        return game.boss.getCircleById(targetId);
+      }
       const allCircles = game.boss.leftArm.circles.concat(game.boss.rightArm.circles);
       return allCircles.find((c) => c.id === targetId) || null;
     }
@@ -2180,22 +2183,29 @@
       if (evt.op === 0) {
         for (const b of evt.bullets || []) {
           if (game.enemyBullets.some((eb) => eb.id === b.id)) continue;
-          const x = b.x + b.vx * delaySec;
-          const y = b.y + b.vy * delaySec;
-          if (y > HEIGHT + 24 || y < -24 || x < -24 || x > WIDTH + 24) continue;
           const bullet = {
             id: b.id,
-            x,
-            y,
+            x: b.x,
+            y: b.y,
             vx: b.vx,
             vy: b.vy,
             angle: b.angle,
             speed: b.speed,
-            timer: delaySec,
+            timer: 0,
             damage: b.damage || 1,
             shape: b.shape,
-            explodeY: b.explodeY
+            explodeY: b.explodeY,
+            explodeCount: b.explodeCount,
+            homingMode: b.homingMode,
+            initVx: b.initVx,
+            initVy: b.initVy,
+            decelDuration: b.decelDuration,
+            waitTarget: b.waitTarget,
+            homingTimer: b.homingTimer || 0,
+            waitAfterStop: b.waitAfterStop || 0
           };
+          Enemy.stepBulletMotion(bullet, delaySec);
+          if (bullet.y > HEIGHT + 24 || bullet.y < -24 || bullet.x < -24 || bullet.x > WIDTH + 24) continue;
           if (!Enemy.maybeExplodeSpadeBullet(bullet, game.enemyBullets, effectsManager)) {
             game.enemyBullets.push(bullet);
           }
@@ -2205,6 +2215,20 @@
         game.enemyBullets = game.enemyBullets.filter((b) => !rm.has(b.id));
       } else if (evt.op === 2) {
         game.enemyBullets = [];
+      } else if (evt.op === 3) {
+        const targetB = game.enemyBullets.find((eb) => eb.id === evt.id);
+        if (targetB) {
+          targetB.x = evt.x;
+          targetB.y = evt.y;
+          targetB.angle = evt.angle;
+          targetB.accel = evt.accel;
+          targetB.maxSpeed = evt.maxSpeed;
+          targetB.speed = 0;
+          targetB.vx = 0;
+          targetB.vy = 0;
+          targetB.homingMode = 'accel';
+          Enemy.stepBulletMotion(targetB, delaySec);
+        }
       }
       return;
     }
@@ -2526,9 +2550,10 @@
 
     // ボス同期（受信スナップショット間隔に合わせて60fpsで滑らかに補間）
     if (snap.bo) {
-      if (!game.boss) {
+      const expectedBossKind = snap.bo[0] === 'snake' ? 'snake' : 'bigfoot';
+      if (!game.boss || game.boss.id !== expectedBossKind) {
         const stageData = MAPS[snap.si % MAPS.length];
-        game.boss = new BigfootBoss(stageData);
+        game.boss = expectedBossKind === 'snake' ? new SnakeBoss(stageData) : new BigfootBoss(stageData);
       }
       game.boss.applySnapshot(snap.bo, Math.max(0.035, guestSnapIntervalEstimate));
     } else {
@@ -2659,12 +2684,10 @@
         }
       }
 
-      // 敵弾のローカル等速直線運動 & スペード弾の高度拡散
+      // 敵弾のローカル推進（等速 / 減速停止->遅延加速） & スペード弾の高度拡散
       for (let i = game.enemyBullets.length - 1; i >= 0; i--) {
         const b = game.enemyBullets[i];
-        b.timer = (b.timer || 0) + dt;
-        b.x += b.vx * dt;
-        b.y += b.vy * dt;
+        Enemy.stepBulletMotion(b, dt);
         if (Enemy.maybeExplodeSpadeBullet(b, game.enemyBullets, effectsManager)) {
           game.enemyBullets.splice(i, 1);
           continue;
@@ -3008,9 +3031,34 @@
     const hitRemovedBulletIds = [];
     for (let i = game.enemyBullets.length - 1; i >= 0; i--) {
       const b = game.enemyBullets[i];
-      b.timer = (b.timer || 0) + dt;
-      b.x += b.vx * dt;
-      b.y += b.vy * dt;
+      Enemy.stepBulletMotion(b, dt);
+
+      if (b.homingMode === 'decel' && (b.waitAfterStop || 0) >= (b.waitTarget ?? 1.0)) {
+        const alivePaddles = game.paddles.filter((pl) => pl && pl.hp > 0);
+        const picked = alivePaddles.length > 0
+          ? alivePaddles[Math.floor(Math.random() * alivePaddles.length)]
+          : { x: WIDTH / 2, y: PADDLE.Y };
+        const angle = Math.atan2(picked.y - b.y, picked.x - b.x);
+        b.homingMode = 'accel';
+        b.angle = angle;
+        b.speed = 0;
+        b.vx = 0;
+        b.vy = 0;
+        b.accel = b.accel || 520;
+        b.maxSpeed = b.maxSpeed || 540;
+        if (mp.mode === 'host' && b.id !== undefined) {
+          mp.sendGameEvent(NetProto.encodeBulletEvt({
+            op: 3,
+            serverTimeMs: mp.getServerTimeMs(),
+            id: b.id,
+            x: b.x,
+            y: b.y,
+            angle: b.angle,
+            accel: b.accel,
+            maxSpeed: b.maxSpeed
+          }));
+        }
+      }
 
       let hitAny = false;
       for (const p of game.paddles) {

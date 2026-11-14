@@ -67,8 +67,9 @@ class Enemy {
 
     const baseId = b.id !== undefined ? (((b.id & 0x0fffffff) * 8) | 0x80000000) >>> 0 : undefined;
     const childSpeed = 185;
-    for (let k = 0; k < 6; k++) {
-      const a = (k / 6) * Math.PI * 2;
+    const splitCount = b.explodeCount || 6;
+    for (let k = 0; k < splitCount; k++) {
+      const a = (k / splitCount) * Math.PI * 2;
       const vx = Math.cos(a) * childSpeed;
       const vy = Math.sin(a) * childSpeed;
       enemyBullets.push({
@@ -84,6 +85,61 @@ class Enemy {
       });
     }
     return true;
+  }
+
+  /**
+   * 敵弾の1フレーム進行（通常等速 / 減速停止->遅延加速弾を共通処理）
+   */
+  static stepBulletMotion(b, dt) {
+    b.timer = (b.timer || 0) + dt;
+    if (b.homingMode === 'decel') {
+      const decelDur = b.decelDuration || 0.4;
+      const initVx = b.initVx !== undefined ? b.initVx : b.vx;
+      const initVy = b.initVy !== undefined ? b.initVy : b.vy;
+      const prevT = b.homingTimer || 0;
+      b.homingTimer = prevT + dt;
+
+      if (prevT < decelDur) {
+        const effDt = Math.min(dt, decelDur - prevT);
+        const t0 = prevT / decelDur;
+        const t1 = (prevT + effDt) / decelDur;
+        const avgFactor = 1 - 0.5 * (t0 + t1);
+        b.x += initVx * avgFactor * effDt;
+        b.y += initVy * avgFactor * effDt;
+      }
+
+      if (b.homingTimer >= decelDur) {
+        b.vx = 0;
+        b.vy = 0;
+        b.speed = 0;
+        b.waitAfterStop = Math.max(0, b.homingTimer - decelDur);
+      } else {
+        const factor = 1 - b.homingTimer / decelDur;
+        b.vx = initVx * factor;
+        b.vy = initVy * factor;
+        b.speed = Math.hypot(b.vx, b.vy);
+      }
+      return;
+    }
+
+    if (b.homingMode === 'accel') {
+      const maxSpd = b.maxSpeed || 540;
+      const accel = b.accel || 520;
+      const prevSpd = b.speed || 0;
+      const nextSpd = Math.min(maxSpd, prevSpd + accel * dt);
+      const avgSpd = 0.5 * (prevSpd + nextSpd);
+      const ux = Math.cos(b.angle || 0);
+      const uy = Math.sin(b.angle || 0);
+      b.speed = nextSpd;
+      b.vx = ux * nextSpd;
+      b.vy = uy * nextSpd;
+      b.x += ux * avgSpd * dt;
+      b.y += uy * avgSpd * dt;
+      return;
+    }
+
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
   }
 
   /**

@@ -171,6 +171,31 @@ class BigfootBoss {
     return side === 'left' ? this.leftArm : (side === 'right' ? this.rightArm : null);
   }
 
+  getCircleById(targetId) {
+    for (const arm of [this.leftArm, this.rightArm]) {
+      const found = arm.circles.find((c) => c.id === targetId);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  hitsCircle(cx, cy, r) {
+    if (this.isDefeated() || this.introProgress < 1) return false;
+    if (this.areArmsAlive()) {
+      for (const arm of [this.leftArm, this.rightArm]) {
+        if (arm.hp <= 0) continue;
+        for (const c of arm.circles) {
+          if (Math.hypot(cx - c.x, cy - c.y) <= r + c.r) {
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+    const verts = this.getHeadVertices();
+    return Boolean(this.checkCircleTriangleCollision(cx, cy, r, verts[0], verts[1], verts[2]));
+  }
+
   getHeadVertices() {
     const pivotX = this.pivotX + (this.headShakeX || 0);
     const pivotY = this.basePivotY + this.introOffsetY + this.bodyOffsetY + this.headThrustOffsetY + (this.headShakeY || 0);
@@ -1210,5 +1235,1258 @@ class BigfootBoss {
     this._interpElapsed = 0;
     this._interpDuration = interpDuration;
   }
+}
+
+/**
+ * ステージ20 ボスエネミークラス (Snake / スネーク)
+ * - 15個の円（頭から尻尾に向けて徐々に小さくなる）で構成された長いヘビ
+ * - 通常時は画面上から3.5個分の円を覗かせてぶらぶら揺れている
+ * - 行動ループ (各攻撃後10秒クールダウン):
+ *   1. ランダムなプレイヤーのパドルをじっと見つめて舌を出して攻撃（4ダメージ）
+ *   2. 顔を引っ込め3秒後、ランダムで:
+ *      a. ランダムなプレイヤーの位置に上から1秒間顔を出し、真下へ急降下（4ダメージ）
+ *      b. 右・下・左のどちらかからサイン波状にクネクネ進行（身体2ダメージ・頭部4ダメージ）
+ *   3. 顔を後ろに引いて突き出しつつ、3方向へランダム順で8方向拡散スペード弾(explode)を計3回発射
+ *   4. 画面を揺らしてステージの敵を2〜4体召喚
+ */
+class SnakeBoss {
+  constructor(stageData) {
+    const { WIDTH } = GAME_CONFIG;
+    this.netKind = 'boss';
+    this.id = 'snake';
+    this.name = 'snake';
+    this.stageEnemies = Array.isArray(stageData && stageData.enemies)
+      ? stageData.enemies.slice()
+      : ['pickaxe', 'quadiamond', 'club', 'spade'];
+    this.spawnLimit = (stageData && typeof stageData.spawn_limit === 'number') ? stageData.spawn_limit : 5;
+
+    this.maxHp = 35;
+    this.hp = this.maxHp;
+    this.hitCooldown = 0;
+
+    this.segmentCount = 30;
+    this.segments = [];
+    this.segDists = [0];
+    this.cumDists = [0];
+    const headRadius = 52;
+    const tailRadius = headRadius * 0.7;
+    for (let i = 0; i < this.segmentCount; i++) {
+      const r = Math.round((headRadius - (i / (this.segmentCount - 1)) * (headRadius - tailRadius)) * 10) / 10;
+      this.segments.push({
+        netKind: 'boss_circle',
+        id: `S${i}`,
+        x: WIDTH / 2,
+        y: -300,
+        r,
+        radius: r
+      });
+      if (i > 0) {
+        const d = (this.segments[i - 1].r + r) * 0.56;
+        this.segDists.push(d);
+        this.cumDists.push(this.cumDists[i - 1] + d);
+      }
+    }
+    this.bodyLength = this.cumDists[this.segmentCount - 1];
+    this.head = this.segments[0];
+
+    this.pivotX = WIDTH / 2;
+    this.restHeadY = 175; // seg[0..2]とseg[3]の約半分(計3.5個)が画面内に収まる高さ
+    this.introProgress = 1;
+    this.introOffsetY = 0;
+    this.bodyOffsetY = 0;
+    this.headThrustOffsetY = 0;
+    this.headAngle = 0;
+    this.currentSwayAmp = 0.08;
+    this.idleClock = 0;
+
+    this.attackCooldown = 5;
+    this.aimDuration = 3.0;
+    this.phase = 'cooldown';
+    this.phaseTimer = 0;
+    this.cooldownDuration = 1.0;
+    this.nextAction = 'start_cycle';
+
+    this.targetSlot = null;
+    this.aimTargetX = WIDTH / 2;
+    this.lockedTargetX = WIDTH / 2;
+    this.blinking = false;
+    this.blinkTimer = 0;
+
+    // 舌攻撃状態
+    this.tongueProgress = 0;
+    this.tongueStartX = WIDTH / 2;
+    this.tongueStartY = this.restHeadY;
+    this.tongueTipX = WIDTH / 2;
+    this.tongueTipY = this.restHeadY;
+    this.tongueStrikeActive = false;
+
+    // 2a (急降下) / 2b (サイン波進行) 用
+    this.diveX = WIDTH / 2;
+    this.diveBulletPairIdx = 0;
+    this.afterimages = [];
+    this.afterimageTimer = 0;
+    this.slitherDir = 'left';
+    this.slitherLUT = null;
+    this.slitherArcPos = 0;
+    this.slitherSpeed = 520;
+    this.attackHitSlots = new Set();
+
+    // 3 (3方向ランダム順 explode弾) / 4 (召喚) 用
+    this.barrageAngles = [];
+    this.activeBarrageAngle = Math.PI / 2;
+    this.summonTriggered = false;
+    this.pendingSummons = [];
+
+    // 撃破演出用 (Bigfootと同様5秒振動 + 煙パルス + 上昇退場)
+    this.defeatDuration = 5.0;
+    this.defeatStartSegments = null;
+    this.defeatSmokeTimer = 0;
+    this.defeatVibClock = 0;
+    this.headShakeX = 0;
+    this.headShakeY = 0;
+
+    this.updateHangingGeometry(0, 0.08);
+  }
+
+  setIntroProgress(progress) {
+    const u = ColorUtils.clamp(progress, 0, 1);
+    this.introProgress = u;
+    const eased = 1 - Math.pow(1 - u, 3);
+    this.introOffsetY = -(1 - eased) * 260;
+    this.updateHangingGeometry(0, 0.08);
+  }
+
+  isDefeated() {
+    return this.hp <= 0;
+  }
+
+  isDefeating() {
+    return this.isDefeated() && this.phase === 'defeated' && this.phaseTimer < (this.defeatDuration || 5.0);
+  }
+
+  getCircleById(targetId) {
+    return this.segments.find((s) => s.id === targetId) || null;
+  }
+
+  hitsCircle(cx, cy, r) {
+    if (this.isDefeated() || this.introProgress < 1) return false;
+    for (const seg of this.segments) {
+      if (seg.y + seg.r <= 0 || seg.y - seg.r >= GAME_CONFIG.HEIGHT) continue;
+      if (Math.hypot(cx - seg.x, cy - seg.y) <= r + seg.r) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  startDefeatAnimation() {
+    if (this.phase === 'defeated') return;
+    this.phase = 'defeated';
+    this.phaseTimer = 0;
+    this.defeatStartSegments = this.segments.map((s) => ({ x: s.x, y: s.y }));
+    this.defeatSmokeTimer = 0;
+    this.defeatVibClock = 0;
+    this.headShakeX = 0;
+    this.headShakeY = 0;
+    this.blinking = false;
+    this.tongueStrikeActive = false;
+    this.tongueProgress = 0;
+    this.pendingSummons = [];
+  }
+
+  updateDefeatVibration() {
+    const duration = this.defeatDuration || 5.0;
+    if (this.phase !== 'defeated' || this.phaseTimer >= duration) {
+      this.headShakeX = 0;
+      this.headShakeY = 0;
+      return;
+    }
+    const u = ColorUtils.clamp(this.phaseTimer / duration, 0, 1);
+    const t = this.defeatVibClock || this.phaseTimer || 0;
+    const amp = 8.5 * (1 - 0.18 * u);
+    this.headShakeX = (Math.sin(t * 78) * 0.65 + Math.sin(t * 131 + 1.1) * 0.35) * amp;
+    this.headShakeY = (Math.cos(t * 91 + 0.7) * 0.65 + Math.cos(t * 149) * 0.35) * (amp * 0.75);
+  }
+
+  /**
+   * 上から3.5個分の円が垂れ下がって揺れる基本姿勢を計算する
+   */
+  updateHangingGeometry(aimAngle = 0, swayAmp = 0.08, extraHeadY = 0) {
+    const { WIDTH } = GAME_CONFIG;
+    const anchorY = this.restHeadY - this.cumDists[4] + this.introOffsetY + this.bodyOffsetY + this.headThrustOffsetY + extraHeadY;
+    const anchorX = WIDTH / 2;
+
+    // 画面上外の胴体部分(4..14)は真っすぐ上方へ配置
+    for (let i = 4; i < this.segmentCount; i++) {
+      this.segments[i].x = anchorX;
+      this.segments[i].y = anchorY - (this.cumDists[i] - this.cumDists[4]);
+    }
+
+    // 画面内へ垂れ下がる首〜頭(3..0)をジョイント角度と揺らぎで連結配置
+    const bendWeights = [1.0, 0.78, 0.52, 0.25];
+    const swayWeights = [1.0, 0.85, 0.6, 0.35];
+    for (let i = 3; i >= 0; i--) {
+      const prev = this.segments[i + 1];
+      const sway = swayAmp > 0 ? Math.sin(this.idleClock * 2.2 - i * 0.55) * swayAmp * swayWeights[i] : 0;
+      const segAngle = aimAngle * bendWeights[i] + sway;
+      const dist = this.segDists[i + 1];
+      this.segments[i].x = prev.x + Math.sin(segAngle) * dist;
+      this.segments[i].y = prev.y + Math.cos(segAngle) * dist;
+    }
+  }
+
+  placeVerticalStack(x, headY) {
+    for (let i = 0; i < this.segmentCount; i++) {
+      this.segments[i].x = x;
+      this.segments[i].y = headY - this.cumDists[i];
+    }
+  }
+
+  pickRandomAlivePaddle(paddles) {
+    const alive = paddles.filter((p) => p && p.hp > 0);
+    if (alive.length === 0) return null;
+    return alive[Math.floor(Math.random() * alive.length)];
+  }
+
+  resolveTrackedPaddleX(paddles) {
+    const { WIDTH } = GAME_CONFIG;
+    if (this.targetSlot !== null && this.targetSlot !== undefined) {
+      const matched = paddles.find((p) => p && p.slot === this.targetSlot && p.hp > 0);
+      if (matched) return matched.x;
+    }
+    const fallback = this.pickRandomAlivePaddle(paddles);
+    if (fallback) {
+      this.targetSlot = fallback.slot;
+      return fallback.x;
+    }
+    return WIDTH / 2;
+  }
+
+  enterCooldown(duration, nextAction) {
+    this.phase = 'cooldown';
+    this.phaseTimer = 0;
+    this.cooldownDuration = duration;
+    this.nextAction = nextAction;
+    this.blinking = false;
+    this.tongueStrikeActive = false;
+    this.tongueProgress = 0;
+  }
+
+  startTongueCycle(paddles) {
+    const picked = this.pickRandomAlivePaddle(paddles);
+    this.targetSlot = picked ? picked.slot : null;
+    this.aimTargetX = picked ? picked.x : GAME_CONFIG.WIDTH / 2;
+    this.phase = 'aim';
+    this.phaseTimer = 0;
+    this.blinking = false;
+    this.tongueStrikeActive = false;
+    this.tongueProgress = 0;
+  }
+
+  startRetractPhase() {
+    this.phase = 'retract';
+    this.phaseTimer = 0;
+    this.blinking = false;
+    this.tongueStrikeActive = false;
+    this.tongueProgress = 0;
+  }
+
+  startSpreadBarragePhase() {
+    // 左・中央・右の3方向をランダムな順番へシャッフル
+    const dirs = [Math.PI / 2 + 0.5, Math.PI / 2, Math.PI / 2 - 0.5];
+    for (let i = dirs.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [dirs[i], dirs[j]] = [dirs[j], dirs[i]];
+    }
+    this.barrageAngles = dirs;
+    this.activeBarrageAngle = this.barrageAngles.shift();
+    this.phase = 'spread_pull';
+    this.phaseTimer = 0;
+    this.blinking = false;
+    this.tongueProgress = 0;
+  }
+
+  startSummonPhase() {
+    this.phase = 'summon';
+    this.phaseTimer = 0;
+    this.summonTriggered = false;
+    this.blinking = false;
+    this.tongueProgress = 0;
+  }
+
+  /**
+   * 2b用: 右・左のどちらかから大きくサイン波に沿って進行するルックアップテーブルを生成
+   * 波長(660px)と振幅(160px)を大きく取り、フルサイズパドル(144px)が波の隙間に収まれるようにする
+   */
+  initSlitherPath() {
+    const { WIDTH, PADDLE } = GAME_CONFIG;
+    const dirs = ['right', 'left'];
+    this.slitherDir = dirs[Math.floor(Math.random() * dirs.length)];
+
+    const samples = 280;
+    const pts = [];
+    const wavePhase = Math.random() * Math.PI * 2;
+    let totalArc = 0;
+
+    const startX = this.slitherDir === 'left' ? -60 : WIDTH + 60;
+    const endX = this.slitherDir === 'left' ? WIDTH + 60 : -60;
+    const sign = this.slitherDir === 'left' ? 1 : -1;
+    const baseY = PADDLE.Y - 20;
+    const amp = 160;
+    const freq = (Math.PI * 2) / 660;
+    for (let i = 0; i <= samples; i++) {
+      const t = i / samples;
+      const x = startX + (endX - startX) * t;
+      const dxTravel = (x - startX) * sign;
+      const y = baseY + Math.sin(dxTravel * freq + wavePhase) * amp;
+      if (i > 0) {
+        totalArc += Math.hypot(x - pts[i - 1].x, y - pts[i - 1].y);
+      }
+      pts.push({ x, y, s: totalArc });
+    }
+    this.slitherEntryTangent = { dx: sign, dy: 0 };
+    this.slitherExitTangent = { dx: sign, dy: 0 };
+
+    this.slitherLUT = pts;
+    this.slitherTotalArc = totalArc;
+    this.slitherArcPos = 0;
+  }
+
+  sampleSlitherPoint(s) {
+    const pts = this.slitherLUT;
+    if (!pts || pts.length === 0) return { x: GAME_CONFIG.WIDTH / 2, y: -300 };
+    if (s <= 0) {
+      const p0 = pts[0];
+      return {
+        x: p0.x + this.slitherEntryTangent.dx * s,
+        y: p0.y + this.slitherEntryTangent.dy * s
+      };
+    }
+    if (s >= this.slitherTotalArc) {
+      const pLast = pts[pts.length - 1];
+      const over = s - this.slitherTotalArc;
+      return {
+        x: pLast.x + this.slitherExitTangent.dx * over,
+        y: pLast.y + this.slitherExitTangent.dy * over
+      };
+    }
+    // 単調増加配列なので二分探索で補間
+    let lo = 0;
+    let hi = pts.length - 1;
+    while (lo + 1 < hi) {
+      const mid = (lo + hi) >> 1;
+      if (pts[mid].s <= s) lo = mid;
+      else hi = mid;
+    }
+    const a = pts[lo];
+    const b = pts[hi];
+    const span = Math.max(0.0001, b.s - a.s);
+    const t = (s - a.s) / span;
+    return {
+      x: a.x + (b.x - a.x) * t,
+      y: a.y + (b.y - a.y) * t
+    };
+  }
+
+  updateSlitherSegments(headS) {
+    for (let i = 0; i < this.segmentCount; i++) {
+      const pt = this.sampleSlitherPoint(headS - this.cumDists[i]);
+      this.segments[i].x = pt.x;
+      this.segments[i].y = pt.y;
+    }
+  }
+
+  computeTongueTargetGeometry(targetX, extensionRatio, pullOffset = 0, aimAngle = this.headAngle, swayAmp = this.currentSwayAmp) {
+    const { PADDLE } = GAME_CONFIG;
+    this.updateHangingGeometry(aimAngle, swayAmp, pullOffset);
+    const head = this.segments[0];
+    const dx = targetX - head.x;
+    const dy = PADDLE.Y - head.y;
+    const dist = Math.hypot(dx, dy) || 1;
+    const ux = dx / dist;
+    const uy = dy / dist;
+    const startX = head.x + ux * (head.r * 0.72);
+    const startY = head.y + uy * (head.r * 0.72);
+    const fullEndX = targetX + ux * 12;
+    const fullEndY = PADDLE.Y + uy * 12;
+    this.tongueStartX = startX;
+    this.tongueStartY = startY;
+    this.tongueTipX = startX + (fullEndX - startX) * extensionRatio;
+    this.tongueTipY = startY + (fullEndY - startY) * extensionRatio;
+    this.tongueProgress = extensionRatio;
+  }
+
+  damagePaddlesAlongSegmentList(paddles, circles, damage, onDamagePaddle, effectsManager) {
+    const { COLORS } = GAME_CONFIG;
+    if (!onDamagePaddle) return;
+    for (const p of paddles) {
+      if (!p || p.hp <= 0 || p.invincibleTimer > 0 || this.attackHitSlots.has(p.slot)) continue;
+      const pLeft = p.x - p.currentWidth / 2;
+      const pRight = p.x + p.currentWidth / 2;
+      const pTop = p.y - p.height / 2;
+      const pBottom = p.y + p.height / 2;
+      for (const c of circles) {
+        const closestX = ColorUtils.clamp(c.x, pLeft, pRight);
+        const closestY = ColorUtils.clamp(c.y, pTop, pBottom);
+        const dx = c.x - closestX;
+        const dy = c.y - closestY;
+        if (dx * dx + dy * dy <= c.r * c.r) {
+          this.attackHitSlots.add(p.slot);
+          onDamagePaddle(p, damage);
+          if (effectsManager) {
+            effectsManager.spawnCircleParticles(closestX, closestY, COLORS.red, 10, 45, 165);
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  spawnSummonedEnemies(enemies) {
+    const { WIDTH } = GAME_CONFIG;
+    if (!this.stageEnemies || this.stageEnemies.length === 0) return;
+
+    const count = 2 + Math.floor(Math.random() * 3); // 2〜4体
+    const margin = 64;
+    const usableW = WIDTH - margin * 2;
+    const sliceW = usableW / count;
+    const sliceIndices = Array.from({ length: count }, (_, idx) => idx);
+    for (let i = sliceIndices.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [sliceIndices[i], sliceIndices[j]] = [sliceIndices[j], sliceIndices[i]];
+    }
+
+    let delay = 0;
+    for (let i = 0; i < count; i++) {
+      const slotIdx = sliceIndices[i];
+      const spawnX = margin + sliceW * slotIdx + (0.2 + Math.random() * 0.6) * sliceW;
+      const typeName = this.stageEnemies[Math.floor(Math.random() * this.stageEnemies.length)];
+      if (i > 0) {
+        delay += 0.35 + Math.random() * 0.65;
+      }
+      if (delay <= 0) {
+        this.spawnSingleSummonedEnemy(typeName, spawnX, enemies);
+      } else {
+        this.pendingSummons.push({ typeName, spawnX, delay });
+      }
+    }
+  }
+
+  spawnSingleSummonedEnemy(typeName, spawnX, enemies) {
+    if (enemies.length >= this.spawnLimit) return;
+    const def = ENEMIES[typeName];
+    if (!def) return;
+    enemies.push(new Enemy(def, spawnX));
+  }
+
+  fireSpadeExplodeShot(angle, enemyBullets, effectsManager, onBarrageSpawn) {
+    const { COLORS } = GAME_CONFIG;
+    const head = this.segments[0];
+    const ux = Math.cos(angle);
+    const uy = Math.sin(angle);
+    const spawnX = head.x + ux * (head.r * 0.78);
+    const spawnY = head.y + uy * (head.r * 0.78);
+    const speed = 215;
+    const explodeY = 485;
+
+    const bullet = {
+      x: spawnX,
+      y: spawnY,
+      vx: ux * speed,
+      vy: uy * speed,
+      angle,
+      speed,
+      damage: 2,
+      timer: 0,
+      shape: 'spade',
+      explodeY,
+      explodeCount: 12
+    };
+    enemyBullets.push(bullet);
+
+    if (onBarrageSpawn) {
+      onBarrageSpawn([bullet]);
+    }
+    if (effectsManager) {
+      effectsManager.spawnCircleParticles(spawnX, spawnY, COLORS.white, 8, 40, 130);
+    }
+  }
+
+  scatterDiveBullets(enemyBullets, onBarrageSpawn, spawnY = null) {
+    const { WIDTH, PADDLE } = GAME_CONFIG;
+    const head = this.segments[0];
+    const safeMaxY = PADDLE.Y - 20;
+    const y = Math.min(spawnY !== null ? spawnY : head.y, safeMaxY);
+    if (y < 0 || y > safeMaxY) return;
+
+    const decelDuration = 0.4;
+    const waitAfterDecel = 0.6; // decelDuration(0.4s) + wait(0.6s) = 出現からちょうど1.0s後に加速開始
+    const spawned = [];
+    for (const side of [-1, 1]) {
+      const spawnX = ColorUtils.clamp(head.x + side * (head.r * 0.65), 24, WIDTH - 24);
+      const maxTravel = side < 0 ? Math.max(0, spawnX - 20) : Math.max(0, WIDTH - 20 - spawnX);
+      const initVx = side * Math.min(300, maxTravel / (decelDuration * 0.5));
+      const initVy = 0;
+      const speed = Math.abs(initVx);
+      const b = {
+        x: spawnX,
+        y,
+        vx: initVx,
+        vy: initVy,
+        angle: Math.atan2(initVy, initVx),
+        speed,
+        damage: 2,
+        timer: 0,
+        homingMode: 'decel',
+        initVx,
+        initVy,
+        homingTimer: 0,
+        decelDuration,
+        waitAfterStop: 0,
+        waitTarget: waitAfterDecel,
+        accel: 520,
+        maxSpeed: 540
+      };
+      enemyBullets.push(b);
+      spawned.push(b);
+    }
+    if (onBarrageSpawn && spawned.length > 0) {
+      onBarrageSpawn(spawned);
+    }
+  }
+
+  updateAfterimages(dt) {
+    const { HEIGHT } = GAME_CONFIG;
+    if (this.phase === 'dive_strike') {
+      this.afterimageTimer += dt;
+      if (this.afterimageTimer >= 0.02) {
+        this.afterimageTimer = 0;
+        const segs = [];
+        for (let i = 0; i < this.segmentCount; i++) {
+          const s = this.segments[i];
+          if (s.y + s.r < -20 || s.y - s.r > HEIGHT + 20) continue;
+          segs.push({ x: s.x, y: s.y, r: s.r });
+        }
+        if (segs.length > 0) {
+          this.afterimages.push({ segs, alpha: 0.55 });
+        }
+      }
+    }
+    for (let i = this.afterimages.length - 1; i >= 0; i--) {
+      this.afterimages[i].alpha -= dt * 2.4;
+      if (this.afterimages[i].alpha <= 0) {
+        this.afterimages.splice(i, 1);
+      }
+    }
+  }
+
+  update(dt, context) {
+    const { PADDLE, HEIGHT } = GAME_CONFIG;
+    const {
+      paddles = [],
+      enemies = [],
+      enemyBullets = [],
+      effectsManager,
+      onDamagePaddle,
+      onScreenShake,
+      onBarrageSpawn
+    } = context || {};
+
+    this.idleClock += dt;
+    this.updateAfterimages(dt);
+    if (this.hitCooldown > 0) {
+      this.hitCooldown = Math.max(0, this.hitCooldown - dt);
+    }
+
+    if (this.isDefeated()) {
+      this.pendingSummons = [];
+      if (this.phase !== 'defeated') {
+        this.startDefeatAnimation();
+      }
+      const duration = this.defeatDuration || 5.0;
+      this.phaseTimer += dt;
+      this.defeatVibClock += dt;
+      const u = ColorUtils.clamp(this.phaseTimer / duration, 0, 1);
+      const retractEase = 0.35 * u + 0.65 * (u * u * (3 - 2 * u));
+      this.updateDefeatVibration();
+
+      const startList = this.defeatStartSegments || this.segments;
+      for (let i = 0; i < this.segmentCount; i++) {
+        const base = startList[i] || this.segments[i];
+        const targetY = -120 - this.cumDists[i];
+        this.segments[i].x = base.x + this.headShakeX;
+        this.segments[i].y = base.y + (targetY - base.y) * retractEase + this.headShakeY;
+      }
+
+      if (onScreenShake && this.phaseTimer < duration) {
+        onScreenShake(0.08, 2.0 * (1 - 0.45 * u));
+      }
+
+      if (effectsManager && this.phaseTimer < duration) {
+        this.defeatSmokeTimer -= dt;
+        const smokeColors = ['#ffffff', '#d8d8d8', '#a8a8a8'];
+        const visibleSegs = this.segments.filter((s) => s.y + s.r > -10 && s.y - s.r < HEIGHT);
+        while (this.defeatSmokeTimer <= 0) {
+          this.defeatSmokeTimer += 0.065;
+          if (visibleSegs.length > 0) {
+            const pick = visibleSegs[Math.floor(Math.random() * visibleSegs.length)];
+            const a = Math.random() * Math.PI * 2;
+            const d = Math.random() * pick.r * 0.85;
+            const sx = pick.x + Math.cos(a) * d;
+            const sy = Math.max(-12, pick.y + Math.sin(a) * d);
+            effectsManager.spawnPulse({
+              kind: 'circle',
+              x: sx,
+              y: sy,
+              radius: 14 + Math.random() * 20,
+              color: smokeColors[Math.floor(Math.random() * smokeColors.length)],
+              duration: 0.65 + Math.random() * 0.45,
+              maxScale: 2.2 + Math.random() * 1.1
+            });
+          }
+        }
+      }
+      return;
+    }
+
+    if (this.introProgress < 1) {
+      this.updateHangingGeometry(0, 0.08);
+      return;
+    }
+
+    // 召喚予約された敵を揺らぎのあるタイミングで出現
+    for (let i = this.pendingSummons.length - 1; i >= 0; i--) {
+      const pending = this.pendingSummons[i];
+      pending.delay -= dt;
+      if (pending.delay <= 0) {
+        this.spawnSingleSummonedEnemy(pending.typeName, pending.spawnX, enemies);
+        this.pendingSummons.splice(i, 1);
+      }
+    }
+
+    this.phaseTimer += dt;
+
+    if (this.phase === 'cooldown') {
+      this.bodyOffsetY *= Math.pow(0.001, dt);
+      this.headThrustOffsetY *= Math.pow(0.001, dt);
+      this.headAngle += (0 - this.headAngle) * Math.min(1, dt * 6);
+      this.currentSwayAmp += (0.08 - this.currentSwayAmp) * Math.min(1, dt * 4.5);
+      this.updateHangingGeometry(this.headAngle, this.currentSwayAmp);
+
+      if (this.phaseTimer >= this.cooldownDuration) {
+        if (this.nextAction === 'start_cycle') {
+          this.startTongueCycle(paddles);
+        } else if (this.nextAction === 'retract_phase') {
+          this.startRetractPhase();
+        } else if (this.nextAction === 'spread_barrage') {
+          this.startSpreadBarragePhase();
+        } else if (this.nextAction === 'summon') {
+          this.startSummonPhase();
+        } else {
+          this.startTongueCycle(paddles);
+        }
+      }
+    } else if (this.phase === 'aim') {
+      this.aimTargetX = this.resolveTrackedPaddleX(paddles);
+      const targetAngle = ColorUtils.clamp(
+        Math.atan2(this.aimTargetX - this.pivotX, PADDLE.Y - this.restHeadY) * 0.85,
+        -0.45,
+        0.45
+      );
+      this.headAngle += (targetAngle - this.headAngle) * Math.min(1, dt * 9);
+      this.currentSwayAmp += (0.02 - this.currentSwayAmp) * Math.min(1, dt * 6);
+      this.updateHangingGeometry(this.headAngle, this.currentSwayAmp);
+
+      if (this.phaseTimer >= this.aimDuration) {
+        this.lockedTargetX = this.aimTargetX;
+        this.phase = 'charging';
+        this.phaseTimer = 0;
+        this.blinking = true;
+        this.blinkTimer = 0;
+      }
+    } else if (this.phase === 'charging') {
+      this.blinking = true;
+      this.blinkTimer = this.phaseTimer;
+      const u = ColorUtils.clamp(this.phaseTimer / 1.0, 0, 1);
+      const eased = 1 - Math.pow(1 - u, 3);
+      const targetAngle = ColorUtils.clamp(
+        Math.atan2(this.lockedTargetX - this.pivotX, PADDLE.Y - this.restHeadY) * 0.85,
+        -0.45,
+        0.45
+      );
+      this.headAngle += (targetAngle - this.headAngle) * Math.min(1, dt * 12);
+      this.currentSwayAmp += (0 - this.currentSwayAmp) * Math.min(1, dt * 10);
+      // 少し首を引いて舌の先端を覗かせる
+      this.computeTongueTargetGeometry(this.lockedTargetX, 0.06 * eased, -20 * eased, this.headAngle, this.currentSwayAmp);
+
+      if (this.phaseTimer >= 1.0) {
+        this.blinking = false;
+        this.phase = 'tongue_strike';
+        this.phaseTimer = 0;
+        this.tongueStrikeActive = true;
+        this.attackHitSlots = new Set();
+      }
+    } else if (this.phase === 'tongue_strike') {
+      this.tongueStrikeActive = true;
+      const u = ColorUtils.clamp(this.phaseTimer / 0.17, 0, 1);
+      const strikeT = u * (2 - u);
+      const targetAngle = ColorUtils.clamp(
+        Math.atan2(this.lockedTargetX - this.pivotX, PADDLE.Y - this.restHeadY) * 0.85,
+        -0.45,
+        0.45
+      );
+      this.headAngle += (targetAngle - this.headAngle) * Math.min(1, dt * 14);
+      this.currentSwayAmp += (0 - this.currentSwayAmp) * Math.min(1, dt * 12);
+      this.computeTongueTargetGeometry(
+        this.lockedTargetX,
+        Math.max(0.06, strikeT),
+        -20 * (1 - strikeT),
+        this.headAngle,
+        this.currentSwayAmp
+      );
+
+      // 舌線分に沿った円群でダメージ判定 (4ダメージ)
+      const samples = 6;
+      const tongueCircles = [];
+      for (let i = 1; i <= samples; i++) {
+        const s = i / samples;
+        tongueCircles.push({
+          x: this.tongueStartX + (this.tongueTipX - this.tongueStartX) * s,
+          y: this.tongueStartY + (this.tongueTipY - this.tongueStartY) * s,
+          r: 12
+        });
+      }
+      this.damagePaddlesAlongSegmentList(paddles, tongueCircles, 4, onDamagePaddle, effectsManager);
+
+      if (this.phaseTimer >= 0.17) {
+        this.tongueStrikeActive = false;
+        this.phase = 'tongue_retract';
+        this.phaseTimer = 0;
+      }
+    } else if (this.phase === 'tongue_retract') {
+      this.tongueStrikeActive = false;
+      const tongueU = ColorUtils.clamp(this.phaseTimer / 0.42, 0, 1);
+      const retractT = 1 - Math.pow(1 - tongueU, 3);
+      // 舌を引っ込めつつ滑らかに角度と揺れを基本姿勢へ戻し、cooldown遷移時のカクつきをなくす
+      const angleRate = this.phaseTimer < 0.22 ? 1.5 : 5.5;
+      this.headAngle += (0 - this.headAngle) * Math.min(1, dt * angleRate);
+      this.currentSwayAmp += (0.04 - this.currentSwayAmp) * Math.min(1, dt * 4.5);
+      this.computeTongueTargetGeometry(
+        this.lockedTargetX,
+        Math.max(0, 1 - retractT),
+        0,
+        this.headAngle,
+        this.currentSwayAmp
+      );
+
+      if (this.phaseTimer >= 0.56) {
+        this.tongueProgress = 0;
+        this.enterCooldown(this.attackCooldown, 'retract_phase');
+      }
+    } else if (this.phase === 'retract') {
+      const u = ColorUtils.clamp(this.phaseTimer / 0.55, 0, 1);
+      const eased = u * u * (3 - 2 * u);
+      this.bodyOffsetY = -260 * eased;
+      this.headAngle += (0 - this.headAngle) * Math.min(1, dt * 6);
+      this.currentSwayAmp += (0.02 - this.currentSwayAmp) * Math.min(1, dt * 6);
+      this.updateHangingGeometry(this.headAngle, this.currentSwayAmp);
+
+      if (this.phaseTimer >= 0.55) {
+        this.phase = 'hidden_wait';
+        this.phaseTimer = 0;
+        this.placeVerticalStack(GAME_CONFIG.WIDTH / 2, -90);
+      }
+    } else if (this.phase === 'hidden_wait') {
+      this.placeVerticalStack(GAME_CONFIG.WIDTH / 2, -90);
+      if (this.phaseTimer >= 3.0) {
+        this.attackHitSlots = new Set();
+        if (Math.random() < 0.5) {
+          // 2a: ランダムなプレイヤーの位置へ上から1秒顔を出して急降下
+          const target = this.pickRandomAlivePaddle(paddles);
+          this.diveX = ColorUtils.clamp(target ? target.x : GAME_CONFIG.WIDTH / 2, 60, GAME_CONFIG.WIDTH - 60);
+          this.phase = 'dive_peek';
+          this.phaseTimer = 0;
+          this.blinking = true;
+          this.blinkTimer = 0;
+        } else {
+          // 2b: 右・左のどちらかから大きなサイン波で進行
+          this.initSlitherPath();
+          this.phase = 'slither_telegraph';
+          this.phaseTimer = 0;
+          this.blinking = true;
+          this.blinkTimer = 0;
+        }
+      }
+    } else if (this.phase === 'dive_peek') {
+      this.blinking = true;
+      this.blinkTimer = this.phaseTimer;
+      const u = ColorUtils.clamp(this.phaseTimer / 0.28, 0, 1);
+      const eased = 1 - Math.pow(1 - u, 3);
+      const peekY = -80 + (100 - -80) * eased;
+      this.placeVerticalStack(this.diveX, peekY);
+
+      if (this.phaseTimer >= 1.0) {
+        this.blinking = false;
+        this.phase = 'dive_strike';
+        this.phaseTimer = 0;
+        this.diveBulletPairIdx = 0;
+        this.afterimages = [];
+        this.afterimageTimer = 0;
+      }
+    } else if (this.phase === 'dive_strike') {
+      const duration = 1.05;
+      const u = ColorUtils.clamp(this.phaseTimer / duration, 0, 1);
+      const startY = 100;
+      const endY = HEIGHT + this.bodyLength + 120;
+      const curHeadY = startY + (endY - startY) * u;
+      const rampIn = Math.min(1, this.phaseTimer / 0.1);
+      for (let i = 0; i < this.segmentCount; i++) {
+        const y = curHeadY - this.cumDists[i];
+        const wiggle = Math.sin(this.phaseTimer * 28 - i * 0.52) * 38 * rampIn;
+        this.segments[i].x = this.diveX + wiggle;
+        this.segments[i].y = y;
+      }
+
+      const scatterYs = [100, 200, 300, 400, 500, 600, 700, 800];
+      const safeMaxY = PADDLE.Y - 20;
+      const head = this.segments[0];
+      while (this.diveBulletPairIdx < scatterYs.length && head.y >= scatterYs[this.diveBulletPairIdx]) {
+        const targetY = scatterYs[this.diveBulletPairIdx];
+        this.diveBulletPairIdx += 1;
+        if (targetY <= safeMaxY) {
+          this.scatterDiveBullets(enemyBullets, onBarrageSpawn, targetY);
+        }
+      }
+
+      // 急降下中にパドルへ触れたら4ダメージ
+      this.damagePaddlesAlongSegmentList(paddles, this.segments, 4, onDamagePaddle, effectsManager);
+
+      if (this.phaseTimer >= duration) {
+        this.phase = 'reenter';
+        this.phaseTimer = 0;
+        this.bodyOffsetY = -260;
+        this.headAngle = 0;
+        this.currentSwayAmp = 0;
+      }
+    } else if (this.phase === 'slither_telegraph') {
+      this.blinking = true;
+      this.blinkTimer = this.phaseTimer;
+      const u = ColorUtils.clamp(this.phaseTimer / 0.25, 0, 1);
+      const eased = 1 - Math.pow(1 - u, 3);
+      this.slitherArcPos = 76 * eased;
+      this.updateSlitherSegments(this.slitherArcPos);
+
+      if (this.phaseTimer >= 0.55) {
+        this.blinking = false;
+        this.phase = 'slither';
+        this.phaseTimer = 0;
+      }
+    } else if (this.phase === 'slither') {
+      this.slitherArcPos += this.slitherSpeed * dt;
+      this.updateSlitherSegments(this.slitherArcPos);
+
+      // 頭部接触4ダメージ・胴体接触2ダメージ (頭部を優先判定)
+      this.damagePaddlesAlongSegmentList(paddles, [this.segments[0]], 4, onDamagePaddle, effectsManager);
+      this.damagePaddlesAlongSegmentList(paddles, this.segments.slice(1), 2, onDamagePaddle, effectsManager);
+
+      if (this.slitherArcPos - this.bodyLength > this.slitherTotalArc + 50) {
+        this.phase = 'reenter';
+        this.phaseTimer = 0;
+        this.bodyOffsetY = -260;
+        this.headAngle = 0;
+        this.currentSwayAmp = 0;
+      }
+    } else if (this.phase === 'reenter') {
+      const u = ColorUtils.clamp(this.phaseTimer / 0.6, 0, 1);
+      const eased = 1 - Math.pow(1 - u, 3);
+      this.bodyOffsetY = -260 * (1 - eased);
+      this.currentSwayAmp += (0.08 - this.currentSwayAmp) * Math.min(1, dt * 5);
+      this.updateHangingGeometry(this.headAngle, this.currentSwayAmp);
+
+      if (this.phaseTimer >= 0.6) {
+        this.bodyOffsetY = 0;
+        this.enterCooldown(this.attackCooldown, 'spread_barrage');
+      }
+    } else if (this.phase === 'spread_pull') {
+      const aimAngle = ColorUtils.clamp((Math.PI / 2 - this.activeBarrageAngle) * 0.7, -0.42, 0.42);
+      this.headAngle += (aimAngle - this.headAngle) * Math.min(1, dt * 12);
+      this.currentSwayAmp += (0.02 - this.currentSwayAmp) * Math.min(1, dt * 8);
+      const u = ColorUtils.clamp(this.phaseTimer / 0.36, 0, 1);
+      const eased = 1 - Math.pow(1 - u, 3);
+      this.headThrustOffsetY = -34 * eased;
+      this.updateHangingGeometry(this.headAngle, this.currentSwayAmp);
+
+      if (this.phaseTimer >= 0.36) {
+        this.phase = 'spread_thrust';
+        this.phaseTimer = 0;
+      }
+    } else if (this.phase === 'spread_thrust') {
+      const u = ColorUtils.clamp(this.phaseTimer / 0.15, 0, 1);
+      const eased = u * u;
+      this.headThrustOffsetY = -34 + (34 - -34) * eased;
+      this.currentSwayAmp += (0.02 - this.currentSwayAmp) * Math.min(1, dt * 8);
+      this.updateHangingGeometry(this.headAngle, this.currentSwayAmp);
+
+      if (this.phaseTimer >= 0.15) {
+        this.headThrustOffsetY = 34;
+        this.updateHangingGeometry(this.headAngle, this.currentSwayAmp);
+        this.fireSpadeExplodeShot(this.activeBarrageAngle, enemyBullets, effectsManager, onBarrageSpawn);
+        this.phase = 'spread_recover';
+        this.phaseTimer = 0;
+      }
+    } else if (this.phase === 'spread_recover') {
+      const u = ColorUtils.clamp(this.phaseTimer / 0.34, 0, 1);
+      const eased = 1 - Math.pow(1 - u, 3);
+      this.headThrustOffsetY = 34 * (1 - eased);
+      this.currentSwayAmp += (0.04 - this.currentSwayAmp) * Math.min(1, dt * 6);
+      this.updateHangingGeometry(this.headAngle, this.currentSwayAmp);
+
+      if (this.phaseTimer >= 0.34) {
+        this.headThrustOffsetY = 0;
+        if (this.barrageAngles.length > 0) {
+          this.activeBarrageAngle = this.barrageAngles.shift();
+          this.phase = 'spread_pull';
+          this.phaseTimer = 0;
+        } else {
+          this.enterCooldown(this.attackCooldown, 'summon');
+        }
+      }
+    } else if (this.phase === 'summon') {
+      this.headAngle += (0 - this.headAngle) * Math.min(1, dt * 8);
+      this.currentSwayAmp += (0.08 - this.currentSwayAmp) * Math.min(1, dt * 5);
+      const env = Math.sin(ColorUtils.clamp(this.phaseTimer / 1.25, 0, 1) * Math.PI);
+      this.bodyOffsetY = Math.sin(this.phaseTimer * 42) * 14 * env;
+      this.updateHangingGeometry(this.headAngle, this.currentSwayAmp);
+
+      if (onScreenShake) {
+        onScreenShake(0.08, 4.2);
+      }
+
+      if (!this.summonTriggered && this.phaseTimer >= 0.82) {
+        this.summonTriggered = true;
+        this.spawnSummonedEnemies(enemies);
+      }
+
+      if (this.phaseTimer >= 1.25) {
+        this.bodyOffsetY = 0;
+        this.enterCooldown(this.attackCooldown, 'start_cycle');
+      }
+    }
+  }
+
+  applyDamageAtSegment(segIndex, pulseColor, effectsManager, onScore, cooldown = 0.08) {
+    if (this.hp <= 0 || this.hitCooldown > 0) return false;
+    const { COLORS } = GAME_CONFIG;
+    this.hitCooldown = cooldown;
+    this.hp = Math.max(0, this.hp - 1);
+
+    const seg = this.segments[segIndex] || this.segments[0];
+    effectsManager.spawnPulse({
+      kind: 'circle',
+      target: seg,
+      x: seg.x,
+      y: seg.y,
+      radius: seg.r,
+      color: pulseColor,
+      duration: this.hp > 0 ? 0.42 : 0.55,
+      maxScale: this.hp > 0 ? 1.55 : 2.15
+    });
+
+    if (this.hp <= 0) {
+      this.startDefeatAnimation();
+      effectsManager.spawnCircleParticles(seg.x, Math.max(40, seg.y), COLORS.white, 22, 60, 220);
+      if (onScore) onScore(2000);
+    } else if (onScore) {
+      onScore(100);
+    }
+    return true;
+  }
+
+  handleSwingCircleCollision(cx, cy, cr, effectsManager, onScore) {
+    if (this.isDefeated() || this.introProgress < 1 || this.hitCooldown > 0) return false;
+    const { COLORS, HEIGHT } = GAME_CONFIG;
+    for (let i = 0; i < this.segmentCount; i++) {
+      const seg = this.segments[i];
+      if (seg.y + seg.r <= 0 || seg.y - seg.r >= HEIGHT) continue;
+      if (Math.hypot(cx - seg.x, cy - seg.y) <= cr + seg.r) {
+        return this.applyDamageAtSegment(i, COLORS.white, effectsManager, onScore, 0.22);
+      }
+    }
+    return false;
+  }
+
+  handleBallCollision(ball, effectsManager, onScore) {
+    if (this.isDefeated() || this.introProgress < 1) return false;
+    const { COLORS, BALL, HEIGHT } = GAME_CONFIG;
+    const isCyanBall = ball.effects.cyan > 0;
+    const pulseColor = isCyanBall ? COLORS.cyan : COLORS.white;
+
+    for (let i = 0; i < this.segmentCount; i++) {
+      const c = this.segments[i];
+      if (c.y + c.r <= 0 || c.y - c.r >= HEIGHT) continue;
+      const dx = ball.x - c.x;
+      const dy = ball.y - c.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist <= ball.radius + c.r) {
+        const nx = dx / (dist || 1);
+        const ny = dy / (dist || 1);
+        this.reflectBall(ball, c.x + nx * (c.r + ball.radius + 2), c.y + ny * (c.r + ball.radius + 2), nx, ny, BALL);
+        this.applyDamageAtSegment(i, pulseColor, effectsManager, onScore, 0.08);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  reflectBall(ball, newX, newY, nx, ny, BALL) {
+    ball.spawningFromCenter = false;
+    const prevVy = ball.vy;
+    const speed = Math.hypot(ball.vx, ball.vy) || BALL.BASE_SPEED;
+    ball.vx = nx * speed;
+    ball.vy = ny * speed;
+    if (ball.effects.yellow <= 0) {
+      ball.clampVerticalAngle(speed);
+    } else if (ball.effects.green > 0 && prevVy < 0 && ball.vy > 0) {
+      ball.vy /= BALL.GREEN_SPEED_MULTIPLIER;
+    }
+    ball.x = ColorUtils.clamp(newX, ball.radius, GAME_CONFIG.WIDTH - ball.radius);
+    ball.y = Math.max(ball.radius, newY);
+  }
+
+  render(ctx) {
+    if (this.isDefeated() && !this.isDefeating()) return;
+    const { COLORS, ENEMY, HEIGHT } = GAME_CONFIG;
+
+    let strokeColor = COLORS.white;
+    if (this.blinking) {
+      const cycle = (this.blinkTimer || 0) % ENEMY.BLINK_CYCLE;
+      strokeColor = cycle < ENEMY.BLINK_CYCLE / 2 ? COLORS.red : COLORS.white;
+    }
+
+    // 0. 高速降下時の緑ボール風ブラー残像を描画
+    for (const ai of this.afterimages) {
+      ctx.save();
+      ctx.globalAlpha = ai.alpha * 0.42;
+      ctx.fillStyle = COLORS.white;
+      for (let i = ai.segs.length - 1; i >= 0; i--) {
+        const seg = ai.segs[i];
+        ctx.beginPath();
+        ctx.arc(seg.x, seg.y, seg.r * 0.92, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    // 1. 舌が伸びているときは二股のヘビ舌を描画（頭部の後ろ/口元から伸ばす）
+    if (this.tongueProgress > 0.01) {
+      const x0 = this.tongueStartX;
+      const y0 = this.tongueStartY;
+      const x1 = this.tongueTipX;
+      const y1 = this.tongueTipY;
+      const dx = x1 - x0;
+      const dy = y1 - y0;
+      const len = Math.hypot(dx, dy);
+      if (len > 2) {
+        const ux = dx / len;
+        const uy = dy / len;
+        const nx = -uy;
+        const ny = ux;
+        const forkLen = Math.min(20, len * 0.25);
+        const forkBaseX = x1 - ux * forkLen;
+        const forkBaseY = y1 - uy * forkLen;
+        const baseHalf = 6.5;
+        const midHalf = 4.2;
+        const tipSpread = 11;
+
+        ctx.save();
+        ctx.fillStyle = '#000000';
+        ctx.strokeStyle = this.blinking ? strokeColor : COLORS.white;
+        ctx.lineWidth = 2.6;
+        ctx.lineJoin = 'miter';
+        ctx.beginPath();
+        ctx.moveTo(x0 + nx * baseHalf, y0 + ny * baseHalf);
+        ctx.lineTo(forkBaseX + nx * midHalf, forkBaseY + ny * midHalf);
+        ctx.lineTo(x1 + nx * tipSpread, y1 + ny * tipSpread);
+        ctx.lineTo(forkBaseX + ux * (forkLen * 0.32), forkBaseY + uy * (forkLen * 0.32));
+        ctx.lineTo(x1 - nx * tipSpread, y1 - ny * tipSpread);
+        ctx.lineTo(forkBaseX - nx * midHalf, forkBaseY - ny * midHalf);
+        ctx.lineTo(x0 - nx * baseHalf, y0 - ny * baseHalf);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    // 2. 尻尾(14) -> 頭(0)の順に重ねて描画（大きい頭部が前面に来る）
+    ctx.save();
+    ctx.fillStyle = '#000000';
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = 2.8;
+    for (let i = this.segmentCount - 1; i >= 0; i--) {
+      const seg = this.segments[i];
+      if (seg.y + seg.r < -20 || seg.y - seg.r > HEIGHT + 20) continue;
+      ctx.beginPath();
+      ctx.arc(seg.x, seg.y, seg.r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  serialize() {
+    const r1 = (v) => Math.round(v * 10) / 10;
+    const r2 = (v) => Math.round(v * 100) / 100;
+    return [
+      'snake',
+      this.phase,
+      r2(this.phaseTimer),
+      r2(this.introProgress),
+      this.hp,
+      this.maxHp,
+      this.blinking ? 1 : 0,
+      r2(this.blinkTimer || 0),
+      r2(this.tongueProgress || 0),
+      r1(this.tongueStartX),
+      r1(this.tongueStartY),
+      r1(this.tongueTipX),
+      r1(this.tongueTipY),
+      this.segments.map((s) => [r1(s.x), r1(s.y)])
+    ];
+  }
+
+  captureInterpState() {
+    return {
+      introProgress: this.introProgress,
+      tongueProgress: this.tongueProgress,
+      tongueStartX: this.tongueStartX,
+      tongueStartY: this.tongueStartY,
+      tongueTipX: this.tongueTipX,
+      tongueTipY: this.tongueTipY,
+      segs: this.segments.map((s) => [s.x, s.y])
+    };
+  }
+
+  applySnapshotStateImmediate(fields) {
+    this.introProgress = fields.introProgress;
+    this.tongueProgress = fields.tongueProgress;
+    this.tongueStartX = fields.tongueStartX;
+    this.tongueStartY = fields.tongueStartY;
+    this.tongueTipX = fields.tongueTipX;
+    this.tongueTipY = fields.tongueTipY;
+    for (let i = 0; i < this.segmentCount; i++) {
+      const pt = fields.segs[i];
+      if (pt) {
+        this.segments[i].x = pt[0];
+        this.segments[i].y = pt[1];
+      }
+    }
+  }
+
+  updateClient(dt) {
+    if (this._hasSnapInterp && this._interpFrom && this._interpTo) {
+      this._interpElapsed += dt;
+      const alpha = this._interpDuration > 0 ? Math.min(1, this._interpElapsed / this._interpDuration) : 1;
+      const lerp = (a, b) => a + (b - a) * alpha;
+      const from = this._interpFrom;
+      const to = this._interpTo;
+      const segs = new Array(this.segmentCount);
+      for (let i = 0; i < this.segmentCount; i++) {
+        segs[i] = [
+          lerp(from.segs[i][0], to.segs[i][0]),
+          lerp(from.segs[i][1], to.segs[i][1])
+        ];
+      }
+      this.applySnapshotStateImmediate({
+        introProgress: lerp(from.introProgress, to.introProgress),
+        tongueProgress: lerp(from.tongueProgress, to.tongueProgress),
+        tongueStartX: lerp(from.tongueStartX, to.tongueStartX),
+        tongueStartY: lerp(from.tongueStartY, to.tongueStartY),
+        tongueTipX: lerp(from.tongueTipX, to.tongueTipX),
+        tongueTipY: lerp(from.tongueTipY, to.tongueTipY),
+        segs
+      });
+    }
+
+    if (this.blinking) {
+      this.blinkTimer = (this.blinkTimer || 0) + dt;
+    }
+
+    this.updateAfterimages(dt);
+
+    if (this.phase === 'defeated' || this.isDefeated()) {
+      this.phase = 'defeated';
+      this.defeatVibClock = (this.defeatVibClock || 0) + dt;
+      this.updateDefeatVibration();
+    } else {
+      this.headShakeX = 0;
+      this.headShakeY = 0;
+    }
+  }
+
+  applySnapshot(data, interpDuration = null) {
+    if (!Array.isArray(data) || data[0] !== 'snake') return;
+    const [
+      ,
+      phase,
+      phaseTimer,
+      introProgress,
+      hp,
+      maxHp,
+      blinking,
+      blinkTimer,
+      tongueProgress,
+      tongueStartX,
+      tongueStartY,
+      tongueTipX,
+      tongueTipY,
+      segs
+    ] = data;
+
+    this.phase = phase || 'cooldown';
+    this.phaseTimer = phaseTimer || 0;
+    this.hp = hp;
+    this.maxHp = maxHp;
+
+    const wasBlink = this.blinking;
+    this.blinking = !!blinking;
+    if (!this.blinking || !wasBlink || interpDuration === null) {
+      this.blinkTimer = blinkTimer || 0;
+    }
+
+    const targetState = {
+      introProgress: introProgress !== undefined ? introProgress : 1,
+      tongueProgress: tongueProgress || 0,
+      tongueStartX: tongueStartX || 0,
+      tongueStartY: tongueStartY || 0,
+      tongueTipX: tongueTipX || 0,
+      tongueTipY: tongueTipY || 0,
+      segs: Array.from({ length: this.segmentCount }, (_, i) => (
+        Array.isArray(segs) && segs[i] ? segs[i] : [this.segments[i].x, this.segments[i].y]
+      ))
+    };
+
+    if (!this._hasSnapInterp || !(interpDuration > 0)) {
+      this._hasSnapInterp = true;
+      this.applySnapshotStateImmediate(targetState);
+      this._interpFrom = this.captureInterpState();
+      this._interpTo = this.captureInterpState();
+      this._interpElapsed = 1;
+      this._interpDuration = interpDuration || 0.042;
+      return;
+    }
+
+    this._interpFrom = this.captureInterpState();
+    this._interpTo = targetState;
+    this._interpElapsed = 0;
+    this._interpDuration = interpDuration;
+  }
+}
+
+function createBossForStage(stageData) {
+  if (stageData && stageData.name === 'snake') {
+    return new SnakeBoss(stageData);
+  }
+  return new BigfootBoss(stageData);
 }
 
