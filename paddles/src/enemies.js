@@ -80,5 +80,39 @@ const ENEMIES = {
     health: 1,
     damage: 6,
     fire_rate: 0
-  }
+  },
+
+  // ステージ21 ~ 30
+  arrow: {
+    name: 'arrow', // ⮟
+    bullet_type: 'laser', // 射撃時間1秒前に、 movement_typeを無視して一時停止。 自分の真下に白色の点線を表示し, 500ms後に点線が赤くなり始める。 さらに500msで完全に赤色になり、 その直後で射撃時間になる。 点線表示が消え、 500msの間レーザーを放つ。 白と赤で点滅するレーザーが自分の真下に放たれ、 イージング無しで横幅が100%、 そのすぐ後レーザーは500msかけて横幅をLinearで0%のサイズにする。 当たり判定はレーザー部分そのまま。
+    movement_type: 'retro',
+    health: 3,
+    damage: 1, // laserでは100msごとに1ダメージ
+    fire_rate: 5
+  },
+  sparkle: {
+    name: 'sparkle', // ⯌
+    bullet_type: 'aimed_laser', // laserと同じだが、 射撃1秒前にランダムなプレイヤーのパドルをエイム(一度エイムしたらその位置で固定、プレイヤーを追跡しない)
+    movement_type: 'retro',
+    health: 3,
+    damage: 1,
+    fire_rate: 5
+  },
+  wide_arrow: {
+    name: 'wide_arrow', // 下向きの "➽"
+    bullet_type: 'aimed_3round', // 3roundだが、 揺らぎ無しでプレイヤーを狙う。
+    movement_type: 'retro',
+    health: 3,
+    damage: 2,
+    fire_rate: 5
+  },
+  scissors: {
+    name: 'scissors', // 下向きの "✂"
+    bullet_type: 'self_destruction', // aimed_fallのときは赤白点滅はしない
+    movement_type: 'aimed_fall', // ランダムなプレイヤーをエイムし、 fire_rate時間が経過後に1秒その位置で止まり、赤白点滅を始める。 1秒が経過すると、 ものすごいスピードと残像を残しながら下へ降下
+    health: 3,
+    damage: 8,
+    fire_rate: 10
+  },
 };

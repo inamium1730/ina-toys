@@ -67,7 +67,16 @@ const GAME_CONFIG = {
     RADIUS: 13,
     FALL_SPEED: 110,
     ROTATION_SPEED: 1.8, // 右回転速度 (rad/s)
-    PULSE_INTERVAL: 0.5  // 0.5秒おきにパルスアニメーション
+    PULSE_INTERVAL: 0.5, // 0.5秒おきにパルスアニメーション
+    STAGE_BLOCK_ITEMS: [
+      'cyan_star',
+      'yellow_star',
+      'green_star',
+      'blue_circle',
+      'pink_heart',
+      'purple_square'
+    ],
+    ENEMY_BASE_INTERVAL: 19.5 // ステージ2 (spawn_interval: 19.5, spawn_limit: 1) でドロップ率100%基準
   },
 
   MULTIPLAYER: {
@@ -83,6 +92,12 @@ const GAME_CONFIG = {
       2: 0.85,
       3: 0.7,
       4: 0.55
+    },
+    BOSS_HP_SCALE_BY_PLAYER_COUNT: {
+      1: 1.0,
+      2: 1.5,
+      3: 2.0,
+      4: 2.5
     }
   }
 };

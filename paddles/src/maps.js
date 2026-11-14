@@ -269,5 +269,139 @@ const MAPS = [
     enemies: ['pickaxe', 'quadiamond', 'club', 'spade'],
     spawn_interval: null,
     spawn_limit: 5
+  },
+  {
+    identifier: 21,
+    name: 'castle',
+    map: [
+      '    #####    ',
+      '### #   # ###',
+      '# # #   # # #',
+      '# ######### #',
+      '# #       # #'
+    ],
+    enemies: ['spade', 'club', 'quadiamond', 'pickaxe'],
+    spawn_interval: 10,
+    spawn_limit: 7
+  },
+  {
+    identifier: 22,
+    name: 'maze',
+    map: [
+      '# # ### #####',
+      '# # # # #   #',
+      '##### # ### #',
+      '#     # # # #',
+      '##### ### # #'
+    ],
+    enemies: ['arrow', 'club'],
+    spawn_interval: 10,
+    spawn_limit: 7
+  },
+  {
+    identifier: 23,
+    name: 'aaa',
+    map: [
+      '  #   #   #  ',
+      ' # # # # # # ',
+      ' ### ### ### ',
+      ' # # # # # # ',
+      ' # # # # # # '
+    ],
+    enemies: ['spade', 'sparkle'],
+    spawn_interval: 10,
+    spawn_limit: 7
+  },
+  {
+    identifier: 24,
+    name: 'notfound',
+    map: [
+      ' # # ### # # ',
+      ' # # # # # # ',
+      ' ### # # ### ',
+      '   # # #   # ',
+      '   # ###   # '
+    ],
+    enemies: ['quadiamond', 'wide_arrow'],
+    spawn_interval: 10,
+    spawn_limit: 7
+  },
+  {
+    identifier: 25,
+    name: 'factory',
+    map: [
+      '             ',
+      '    #  #  #  ',
+      '   ## ## ##  ',
+      '  #########  ',
+      '  #########  '
+    ],
+    enemies: ['pickaxe', 'scissors'],
+    spawn_interval: 10,
+    spawn_limit: 7
+  },
+  {
+    identifier: 26,
+    name: 'mimimi',
+    map: [
+      ' ### ### ### ',
+      '             ',
+      ' ### ### ### ',
+      '             ',
+      ' ### ### ### '
+    ],
+    enemies: ['arrow', 'sparkle', 'club', 'triangle'],
+    spawn_interval: 7.5,
+    spawn_limit: 7
+  },
+  {
+    identifier: 27,
+    name: 'hdd',
+    map: [
+      '    #####    ',
+      '   #######   ',
+      '  #########  ',
+      ' #         # ',
+      '  #########  '
+    ],
+    enemies: ['diamond', 'spade', 'sparkle', 'wide_arrow'],
+    spawn_interval: 7.5,
+    spawn_limit: 7
+  },
+  {
+    identifier: 28,
+    name: 'bigwalk',
+    map: [
+      '  #  ###  #  ',
+      ' #  #####  # ',
+      ' #  #####  # ',
+      ' #  #####  # ',
+      '  #  ###  #  '
+    ],
+    enemies: ['pentagon', 'quadiamond', 'wide_arrow', 'scissors'],
+    spawn_interval: 7.5,
+    spawn_limit: 7
+  },
+  {
+    identifier: 29,
+    name: 'diamonds',
+    map: [
+      '#   #   #   #',
+      ' # # # # # # ',
+      '  #   #   #  ',
+      ' # # # # # # ',
+      '#   #   #   #'
+    ],
+    enemies: ['hexagon', 'pickaxe', 'scissors', 'wide_arrow', 'arrow', 'sparkle'],
+    spawn_interval: 7.5,
+    spawn_limit: 7
+  },
+  {
+    identifier: 30,
+    name: 'cloud',
+    map: 'boss',
+    enemies: ['arrow', 'wide_arrow', 'sparkle', 'scissors'],
+    spawn_interval: null,
+    spawn_limit: 7
   }
 ];

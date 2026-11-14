@@ -381,9 +381,9 @@ class NetProto {
 
     if (s.bo) {
       const bo = s.bo;
-      const isSnake = bo[0] === 'snake';
-      w.u8(isSnake ? 1 : 0);
-      if (isSnake) {
+      const bossKind = bo[0] === 'snake' ? 1 : (bo[0] === 'cloud' ? 2 : 0);
+      w.u8(bossKind);
+      if (bossKind === 1) {
         w.tagStr(NetProto.BOSS_PHASES, bo[1]);
         w.ms16(bo[2]);
         w.u16((bo[3] !== undefined ? bo[3] : 1) * 1000);
@@ -402,6 +402,21 @@ class NetProto {
           const pt = segs[i] || [0, -300];
           w.c10(pt[0]);
           w.c10(pt[1]);
+        }
+      } else if (bossKind === 2) {
+        w.tagStr(NetProto.BOSS_PHASES, bo[1]);
+        w.ms16(bo[2]);
+        w.u16((bo[3] !== undefined ? bo[3] : 1) * 1000);
+        w.u16(bo[4]);
+        w.u16(bo[5]);
+        w.u16(Math.round((bo[6] || 0) * 1000));
+        w.u16(Math.round((bo[7] || 0) * 100));
+        const bolts = bo[8] || [];
+        w.u8(bolts.length);
+        for (let i = 0; i < bolts.length; i++) {
+          const bt = bolts[i] || [0, 0];
+          w.c10(bt[0]);
+          w.u16(bt[1] || 0);
         }
       } else {
         w.tagStr(NetProto.BOSS_PHASES, bo[0]);
@@ -522,6 +537,23 @@ class NetProto {
           hp, maxHp, blinking, blinkTimer,
           tongueProgress, tongueStartX, tongueStartY, tongueTipX, tongueTipY,
           segs
+        ];
+      } else if (bossKind === 2) {
+        const phase = r.tagStr(NetProto.BOSS_PHASES);
+        const phaseTimer = r.ms16();
+        const introProgress = r.u16() / 1000;
+        const hp = r.u16();
+        const maxHp = r.u16();
+        const fogLevel = r.u16() / 1000;
+        const trembleAmp = r.u16() / 100;
+        const boltCount = r.u8();
+        const bolts = new Array(boltCount);
+        for (let i = 0; i < boltCount; i++) {
+          bolts[i] = [r.c10(), r.u16()];
+        }
+        bo = [
+          'cloud', phase, phaseTimer, introProgress,
+          hp, maxHp, fogLevel, trembleAmp, bolts
         ];
       } else {
         const phase = r.tagStr(NetProto.BOSS_PHASES);
@@ -798,6 +830,17 @@ class NetProto {
     } else if (evt.op === 3) {
       w.u32(evt.enemyId || 0);
       w.u8(evt.reason || 0);
+    } else if (evt.op === 5) {
+      w.u32(evt.enemyId || 0);
+      w.u8(evt.subOp || 0);
+      w.c10(evt.x);
+      w.c10(evt.y);
+      w.c10(evt.vx || 0);
+      w.c10(evt.vy || 0);
+      w.ang16(evt.angle || 0);
+      w.ms16(evt.timer || 0);
+      w.u8(evt.phaseCode || 0);
+      w.i16(evt.targetSlot !== undefined && evt.targetSlot !== null ? evt.targetSlot : -1);
     }
     return w.finish();
   }
@@ -839,6 +882,18 @@ class NetProto {
     } else if (op === 3) {
       evt.enemyId = r.u32();
       evt.reason = r.u8();
+    } else if (op === 5) {
+      evt.enemyId = r.u32();
+      evt.subOp = r.u8();
+      evt.x = r.c10();
+      evt.y = r.c10();
+      evt.vx = r.c10();
+      evt.vy = r.c10();
+      evt.angle = r.ang16();
+      evt.timer = r.ms16();
+      evt.phaseCode = r.u8();
+      const s = r.i16();
+      evt.targetSlot = s >= 0 ? s : null;
     }
     return evt;
   }
@@ -1123,19 +1178,32 @@ NetProto.BOSS_PHASES = [
   'cooldown', 'aim', 'charging', 'punch_strike', 'punch_retract',
   'tongue_strike', 'tongue_retract', 'retract', 'hidden_wait',
   'dive_peek', 'dive_strike', 'slither_telegraph', 'slither', 'reenter',
-  'summon', 'spread_pull', 'spread_thrust', 'spread_recover', 'intro', 'defeated'
+  'summon', 'spread_pull', 'spread_thrust', 'spread_recover',
+  'rain_attack', 'lightning_telegraph', 'lightning_strike', 'fog_cast',
+  'intro', 'defeated'
 ];
-NetProto.SKILL_KEYS = typeof SKILLS !== 'undefined' ? Object.keys(SKILLS) : ['swing'];
-NetProto.ENEMY_NAMES = ['triangle', 'square', 'diamond', 'pentagon', 'hexagon', 'club', 'spade', 'quadiamond', 'pickaxe'];
-NetProto.BULLET_TYPES = ['none', 'single', 'spread', 'aimed', 'self_destruction', '3round', 'explode', 'connect'];
+NetProto.SKILL_KEYS = typeof SKILLS !== 'undefined' ? Object.keys(SKILLS) : ['swing', 'crack'];
+NetProto.ENEMY_NAMES = [
+  'triangle', 'square', 'diamond', 'pentagon', 'hexagon', 'club', 'spade', 'quadiamond', 'pickaxe',
+  'arrow', 'sparkle', 'wide_arrow', 'scissors'
+];
+NetProto.BULLET_TYPES = [
+  'none', 'single', 'spread', 'aimed', 'self_destruction', '3round', 'explode', 'connect',
+  'laser', 'aimed_laser', 'aimed_3round'
+];
 NetProto.ITEM_TYPES = ['cyan_star', 'yellow_star', 'green_star', 'blue_circle', 'pink_heart', 'purple_square'];
 NetProto.FX_TYPES = ['fx_pulse', 'fx_particles', 'fx_regen', 'fx_shatter', 'paddle_hit'];
 NetProto.TARGET_KINDS = ['none', 'paddle', 'ball', 'enemy', 'item', 'purple', 'boss_head', 'boss_circle'];
-NetProto.PULSE_KINDS = ['circle', 'paddle', 'block', 'enemy', 'item', 'purple_paddle', 'boss_head', 'boss_circle', 'rect', 'polygon'];
-NetProto.SUB_TYPES = ['cyan', 'yellow', 'green', 'white', 'red', 'damage', 'heal', 'pickup'];
+NetProto.PULSE_KINDS = ['circle', 'paddle', 'block', 'enemy', 'item', 'purple_paddle', 'boss_head', 'boss_circle', 'rect', 'polygon', 'crack'];
+NetProto.SUB_TYPES = [
+  'cyan', 'yellow', 'green', 'white', 'red', 'damage', 'heal', 'pickup',
+  'triangle', 'square', 'diamond', 'pentagon', 'hexagon', 'club', 'spade', 'quadiamond', 'pickaxe',
+  'arrow', 'sparkle', 'wide_arrow', 'scissors',
+  'cyan_star', 'yellow_star', 'green_star', 'blue_circle', 'pink_heart', 'purple_square'
+];
 NetProto.COLORS = [
   '#00ffff', '#ffff00', '#00ff00', '#ffffff', '#ff3b3b', '#ff5555', '#aa44ff',
-  '#d8d8d8', '#a8a8a8',
+  '#ffd82b', '#d8d8d8', '#a8a8a8',
   'rgba(255, 255, 255, 0.9)', 'rgba(0, 255, 255, 0.85)', 'rgba(255, 255, 0, 0.85)', 'rgba(0, 255, 0, 0.85)'
 ];
 

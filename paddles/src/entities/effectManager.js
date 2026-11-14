@@ -284,6 +284,57 @@ class EffectManager {
         ShapeRenderer.drawItemShape(ctx, pls.subType, px, py, pls.radius * scale, pAngle, pls.color, alpha);
       } else if (pls.kind === 'enemy') {
         ShapeRenderer.drawEnemyShape(ctx, pls.subType, px, py, pls.radius * scale, pAngle, pls.color, alpha);
+      } else if (pls.kind === 'crack') {
+        ctx.save();
+        ctx.translate(px, py);
+        ctx.rotate(pAngle);
+        const ease = 1 - (1 - t) * (1 - t);
+        const maxR = (pls.radius || 32) * (pls.maxScale || 1.5);
+        const ringR = maxR * (0.28 + 0.85 * ease);
+
+        // 中心の瞬間フラッシュ
+        if (t < 0.5) {
+          const flashT = t / 0.5;
+          ctx.save();
+          ctx.globalAlpha = (1 - flashT) * 0.92;
+          ctx.fillStyle = GAME_CONFIG.COLORS.yellow;
+          ctx.beginPath();
+          ctx.arc(0, 0, maxR * 0.52 * (1 - flashT * 0.35), 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = pls.color || GAME_CONFIG.COLORS.white;
+          ctx.beginPath();
+          ctx.arc(0, 0, maxR * 0.32 * (1 - flashT * 0.45), 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+
+        // 外側へ広がる爆風リング
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, 1 - t);
+        ctx.strokeStyle = pls.color || GAME_CONFIG.COLORS.white;
+        ctx.lineWidth = Math.max(0.8, 3.2 * (1 - t));
+        ctx.beginPath();
+        ctx.arc(0, 0, ringR, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+
+        // 放射状の爆発スパイク
+        const spikeCount = 8;
+        ctx.lineCap = 'round';
+        for (let i = 0; i < spikeCount; i++) {
+          const a = (i / spikeCount) * Math.PI * 2;
+          const isMajor = i % 2 === 0;
+          const innerR = maxR * (0.18 + 0.55 * ease);
+          const outerR = maxR * ((isMajor ? 0.55 : 0.42) + (isMajor ? 0.92 : 0.72) * ease);
+          ctx.globalAlpha = Math.max(0, (1 - t) * (isMajor ? 0.95 : 0.75));
+          ctx.strokeStyle = isMajor ? (pls.color || GAME_CONFIG.COLORS.white) : GAME_CONFIG.COLORS.yellow;
+          ctx.lineWidth = Math.max(0.8, (isMajor ? 2.6 : 1.9) * (1 - t * 0.7));
+          ctx.beginPath();
+          ctx.moveTo(Math.cos(a) * innerR, Math.sin(a) * innerR);
+          ctx.lineTo(Math.cos(a) * outerR, Math.sin(a) * outerR);
+          ctx.stroke();
+        }
+        ctx.restore();
       } else if (pls.kind === 'boss_head') {
         ctx.save();
         ctx.globalAlpha = alpha;

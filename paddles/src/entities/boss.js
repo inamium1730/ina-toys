@@ -8,8 +8,16 @@
  *   2. 召喚フェーズ (身体全体を上下に揺らし画面も揺れ、しばらくするとステージのenemiesからランダムに2〜4体召喚 -> クールダウン)
  *   3. 10way半円拡散弾×3回 (顔を上に引いてから下に突き出し、先端から15個の弾を半円状に発射×3回 -> クールダウン)
  */
+function getBossHpScaleForCount(playerCount = 1) {
+  const { MULTIPLAYER } = GAME_CONFIG;
+  const maxPlayers = (MULTIPLAYER && MULTIPLAYER.MAX_PLAYERS) || 4;
+  const clamped = Math.max(1, Math.min(maxPlayers, Math.round(playerCount || 1)));
+  const table = MULTIPLAYER && MULTIPLAYER.BOSS_HP_SCALE_BY_PLAYER_COUNT;
+  return (table && table[clamped]) || 1.0;
+}
+
 class BigfootBoss {
-  constructor(stageData) {
+  constructor(stageData, playerCount = 1) {
     const { WIDTH } = GAME_CONFIG;
     this.netKind = 'boss';
     this.id = 'bigfoot';
@@ -19,8 +27,9 @@ class BigfootBoss {
       : ['triangle', 'pentagon', 'diamond', 'hexagon'];
     this.spawnLimit = (stageData && typeof stageData.spawn_limit === 'number') ? stageData.spawn_limit : 10;
 
-    this.armMaxHp = 15;
-    this.headMaxHp = 10;
+    const hpScale = getBossHpScaleForCount(playerCount);
+    this.armMaxHp = Math.round(15 * hpScale);
+    this.headMaxHp = Math.round(10 * hpScale);
 
     this.pivotX = WIDTH / 2;
     this.basePivotY = -45;
@@ -876,6 +885,39 @@ class BigfootBoss {
     return false;
   }
 
+  canTakeCrackDamage() {
+    if (this.isDefeated() || this.introProgress < 1) return false;
+    return this.areArmsAlive() || this.head.hp > 1;
+  }
+
+  applyCrackDamage(effectsManager, onScore, onSpawnItem) {
+    if (!this.canTakeCrackDamage()) return null;
+    const { COLORS } = GAME_CONFIG;
+    const aliveArms = [this.leftArm, this.rightArm].filter((arm) => arm && arm.hp > 0);
+    if (aliveArms.length > 0) {
+      const pickedArm = aliveArms[Math.floor(Math.random() * aliveArms.length)];
+      const hitCircle = pickedArm.circles[Math.floor(Math.random() * pickedArm.circles.length)] || pickedArm.circles[0];
+      pickedArm.hitCooldown = 0;
+      const applied = this.applyArmDamage(
+        pickedArm,
+        hitCircle.x,
+        hitCircle.y,
+        COLORS.white,
+        effectsManager,
+        onScore,
+        onSpawnItem,
+        0
+      );
+      return applied ? { x: hitCircle.x, y: hitCircle.y } : null;
+    }
+    if (this.head.hp > 1) {
+      this.head.hitCooldown = 0;
+      const applied = this.applyHeadDamage(COLORS.white, effectsManager, onScore, 0);
+      return applied ? { x: this.head.x, y: this.head.y } : null;
+    }
+    return null;
+  }
+
   /**
    * ボールとの衝突およびダメージ処理
    * - 両腕が残っている間は、顔に当たっても反射するのみでダメージは入らない
@@ -1250,7 +1292,7 @@ class BigfootBoss {
  *   4. 画面を揺らしてステージの敵を2〜4体召喚
  */
 class SnakeBoss {
-  constructor(stageData) {
+  constructor(stageData, playerCount = 1) {
     const { WIDTH } = GAME_CONFIG;
     this.netKind = 'boss';
     this.id = 'snake';
@@ -1260,7 +1302,8 @@ class SnakeBoss {
       : ['pickaxe', 'quadiamond', 'club', 'spade'];
     this.spawnLimit = (stageData && typeof stageData.spawn_limit === 'number') ? stageData.spawn_limit : 5;
 
-    this.maxHp = 35;
+    const hpScale = getBossHpScaleForCount(playerCount);
+    this.maxHp = Math.round(35 * hpScale);
     this.hp = this.maxHp;
     this.hitCooldown = 0;
 
@@ -2215,6 +2258,29 @@ class SnakeBoss {
     return false;
   }
 
+  canTakeCrackDamage() {
+    return !this.isDefeated() && this.introProgress >= 1 && this.hp > 1;
+  }
+
+  applyCrackDamage(effectsManager, onScore) {
+    if (!this.canTakeCrackDamage()) return null;
+    const { COLORS, HEIGHT } = GAME_CONFIG;
+    const visibleIndices = [];
+    for (let i = 0; i < this.segmentCount; i++) {
+      const seg = this.segments[i];
+      if (seg && seg.y + seg.r > 0 && seg.y - seg.r < HEIGHT) {
+        visibleIndices.push(i);
+      }
+    }
+    const segIndex = visibleIndices.length > 0
+      ? visibleIndices[Math.floor(Math.random() * visibleIndices.length)]
+      : 0;
+    this.hitCooldown = 0;
+    const applied = this.applyDamageAtSegment(segIndex, COLORS.white, effectsManager, onScore, 0);
+    const seg = this.segments[segIndex] || this.segments[0];
+    return applied && seg ? { x: seg.x, y: seg.y } : null;
+  }
+
   handleBallCollision(ball, effectsManager, onScore) {
     if (this.isDefeated() || this.introProgress < 1) return false;
     const { COLORS, BALL, HEIGHT } = GAME_CONFIG;
@@ -2483,10 +2549,770 @@ class SnakeBoss {
   }
 }
 
-function createBossForStage(stageData) {
-  if (stageData && stageData.name === 'snake') {
-    return new SnakeBoss(stageData);
+/**
+ * ステージ30「cloud」ボス: 画面上部横いっぱいに広がる雲（結合された黒丸群）
+ */
+class CloudBoss {
+  constructor(stageData, playerCount = 1) {
+    const { WIDTH } = GAME_CONFIG;
+    this.netKind = 'boss';
+    this.id = 'cloud';
+    this.name = (stageData && stageData.name) || 'cloud';
+    this.stageEnemies = (stageData && Array.isArray(stageData.enemies) && stageData.enemies.length > 0)
+      ? stageData.enemies
+      : ['arrow', 'wide_arrow', 'sparkle', 'scissors'];
+    this.spawnLimit = (stageData && stageData.spawn_limit) || 7;
+
+    const hpScale = getBossHpScaleForCount(playerCount);
+    this.maxHp = Math.round(90 * hpScale);
+    this.hp = this.maxHp;
+    this.hitCooldown = 0;
+
+    this.attackCooldown = 5.0;
+    this.phase = 'cooldown';
+    this.phaseTimer = 0;
+    this.cooldownDuration = this.attackCooldown;
+    this.cycleStep = 0; // 0:大量弾, 1:レーザー予告->稲妻, 2:敵3-5体召喚, 3:霧5秒展開(20秒持続), 4:0..2のどれか再実行
+
+    this.introProgress = 1;
+    this.introOffsetY = 0;
+    this.idleClock = 0;
+    this.trembleAmp = 0;
+    this.bodyOffsetY = 0;
+    this.defeatDuration = 5.0;
+    this.defeatSmokeTimer = 0;
+    this.defeatStartOffsetY = 0;
+
+    // 雲を構成する丸群（横いっぱいに重なりをもって配置）
+    this.basePuffs = [
+      { bx: 8, by: 36, r: 72, phase: 0.2, bob: 2.2 },
+      { bx: 94, by: 30, r: 76, phase: 0.9, bob: 2.4 },
+      { bx: 190, by: 34, r: 74, phase: 1.7, bob: 2.1 },
+      { bx: 292, by: 28, r: 80, phase: 2.4, bob: 2.5 },
+      { bx: 396, by: 30, r: 78, phase: 3.1, bob: 2.3 },
+      { bx: 500, by: 28, r: 80, phase: 3.9, bob: 2.4 },
+      { bx: 602, by: 34, r: 74, phase: 4.6, bob: 2.1 },
+      { bx: 696, by: 30, r: 76, phase: 5.3, bob: 2.4 },
+      { bx: 774, by: 38, r: 72, phase: 6.0, bob: 2.2 },
+      // 下側の丸い膨らみ列
+      { bx: 52, by: 88, r: 58, phase: 0.7, bob: 2.8 },
+      { bx: 148, by: 96, r: 64, phase: 1.5, bob: 3.0 },
+      { bx: 248, by: 90, r: 60, phase: 2.2, bob: 2.6 },
+      { bx: 350, by: 102, r: 68, phase: 3.0, bob: 3.1 },
+      { bx: 454, by: 94, r: 62, phase: 3.8, bob: 2.7 },
+      { bx: 556, by: 100, r: 66, phase: 4.5, bob: 3.0 },
+      { bx: 656, by: 90, r: 60, phase: 5.2, bob: 2.7 },
+      { bx: 742, by: 88, r: 58, phase: 5.9, bob: 2.8 }
+    ];
+    this.puffs = this.basePuffs.map((p) => ({
+      x: p.bx,
+      y: p.by,
+      r: p.r,
+      netKind: 'boss_circle',
+      id: 0
+    }));
+    this.puffs.forEach((p, idx) => {
+      p.id = 200 + idx;
+    });
+
+    // 攻撃用ステート
+    this.rainSpawnTimer = 0;
+    this.lightningBolts = []; // [{ x, seed }, ...]
+    this.attackHitSlots = new Set();
+    this.pendingSummons = [];
+    this.summonTriggered = false;
+
+    // 霧ステート（5秒かけて展開 -> 20秒持続 -> 1.5秒フェードアウト）
+    this.fogLevel = 0;
+    this.fogHoldTimer = 0;
+    this.fogRampActive = false;
+    this.fogRampTimer = 0;
+
+    this._hasSnapInterp = false;
+    this._interpFrom = null;
+    this._interpTo = null;
+    this._interpElapsed = 0;
+    this._interpDuration = 0.042;
+    this._lastGuestPhase = 'cooldown';
   }
-  return new BigfootBoss(stageData);
+
+  isDefeated() {
+    return this.hp <= 0;
+  }
+
+  isDefeating() {
+    return this.isDefeated() && this.phase === 'defeated' && this.phaseTimer < (this.defeatDuration || 5.0);
+  }
+
+  setIntroProgress(progress) {
+    const u = ColorUtils.clamp(progress, 0, 1);
+    const eased = 1 - Math.pow(1 - u, 3);
+    this.introProgress = u;
+    this.introOffsetY = -230 * (1 - eased);
+    this.syncPuffPositions(0, 0);
+  }
+
+  startDefeatAnimation() {
+    this.phase = 'defeated';
+    this.phaseTimer = 0;
+    this.defeatDuration = 5.0;
+    this.defeatSmokeTimer = 0;
+    this.defeatStartOffsetY = this.bodyOffsetY;
+    this.lightningBolts = [];
+    this.pendingSummons = [];
+    this.fogRampActive = false;
+    this.fogHoldTimer = 0;
+    this.trembleAmp = 7.5;
+  }
+
+  syncPuffPositions(trembleX = 0, trembleY = 0) {
+    const offsetY = this.introOffsetY + this.bodyOffsetY + trembleY;
+    for (let i = 0; i < this.basePuffs.length; i++) {
+      const bp = this.basePuffs[i];
+      const bobY = Math.sin(this.idleClock * 1.45 + bp.phase) * bp.bob;
+      this.puffs[i].x = bp.bx + trembleX;
+      this.puffs[i].y = bp.by + bobY + offsetY;
+      this.puffs[i].r = bp.r;
+    }
+  }
+
+  getTrembleOffset() {
+    if (this.trembleAmp <= 0.01) return { x: 0, y: 0 };
+    const x = Math.sin(this.idleClock * 53.0) * this.trembleAmp;
+    const y = Math.cos(this.idleClock * 47.0) * (this.trembleAmp * 0.65);
+    return { x, y };
+  }
+
+  getCloudBottomAt(targetX) {
+    let maxBottom = 115;
+    for (const p of this.puffs) {
+      if (Math.abs(targetX - p.x) <= p.r) {
+        const dy = Math.sqrt(Math.max(0, p.r * p.r - (targetX - p.x) * (targetX - p.x)));
+        maxBottom = Math.max(maxBottom, p.y + dy * 0.72);
+      }
+    }
+    return maxBottom;
+  }
+
+  enterCooldown(duration = this.attackCooldown) {
+    this.phase = 'cooldown';
+    this.phaseTimer = 0;
+    this.cooldownDuration = duration;
+    this.lightningBolts = [];
+    this.trembleAmp = 0;
+  }
+
+  startActionByIndex(actionIdx, paddles) {
+    const { WIDTH } = GAME_CONFIG;
+    if (actionIdx === 0) {
+      // 1. 雲の中から敵弾を大量に降らせる (2ダメージ)
+      this.phase = 'rain_attack';
+      this.phaseTimer = 0;
+      this.rainSpawnTimer = 0;
+      this.trembleAmp = 2.8;
+    } else if (actionIdx === 1) {
+      // 2. 2秒間レーザー線表示(500ms前に赤くなり始める) -> 真下に稲妻を同タイミング複数発 (4ダメージ)
+      const count = 4 + Math.floor(Math.random() * 3); // 4 ~ 6本
+      const margin = 52;
+      const usableW = WIDTH - margin * 2;
+      const sliceW = usableW / count;
+      const bolts = [];
+      for (let i = 0; i < count; i++) {
+        const bx = margin + sliceW * i + (0.2 + Math.random() * 0.6) * sliceW;
+        bolts.push({
+          x: Math.round(bx),
+          seed: Math.floor(Math.random() * 65535)
+        });
+      }
+      this.lightningBolts = bolts;
+      this.attackHitSlots = new Set();
+      this.phase = 'lightning_telegraph';
+      this.phaseTimer = 0;
+      this.trembleAmp = 1.8;
+    } else if (actionIdx === 2) {
+      // 3. 雲を揺らし、上から敵を3〜5体召喚
+      this.phase = 'summon';
+      this.phaseTimer = 0;
+      this.summonTriggered = false;
+      this.trembleAmp = 8.5;
+    } else {
+      // 4. 雲を揺らし、5秒かけて画面全体を霧で包む（20秒持続）
+      this.phase = 'fog_cast';
+      this.phaseTimer = 0;
+      this.fogRampActive = true;
+      this.fogRampTimer = 0;
+      this.trembleAmp = 6.5;
+    }
+  }
+
+  startNextCycleStep(paddles) {
+    const step = this.cycleStep;
+    this.cycleStep = (this.cycleStep + 1) % 5;
+    if (step === 4) {
+      // 5. 1, 2, 3のどれかの行動をもう1回行う
+      const choice = Math.floor(Math.random() * 3);
+      this.startActionByIndex(choice, paddles);
+    } else {
+      this.startActionByIndex(step, paddles);
+    }
+  }
+
+  spawnRainBullets(enemyBullets, onBarrageSpawn) {
+    const { WIDTH } = GAME_CONFIG;
+    const count = 2 + (Math.random() < 0.4 ? 1 : 0);
+    const spawned = [];
+    for (let i = 0; i < count; i++) {
+      const bx = 28 + Math.random() * (WIDTH - 56);
+      const by = Math.max(40, this.getCloudBottomAt(bx) - 10 - Math.random() * 18);
+      const angle = Math.PI / 2 + (Math.random() - 0.5) * 0.28;
+      const speed = 205 + Math.random() * 75;
+      const b = {
+        x: bx,
+        y: by,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        angle,
+        speed,
+        damage: 2,
+        timer: 0
+      };
+      enemyBullets.push(b);
+      spawned.push(b);
+    }
+    if (onBarrageSpawn && spawned.length > 0) {
+      onBarrageSpawn(spawned);
+    }
+  }
+
+  spawnSummonedEnemies(enemies) {
+    const { WIDTH } = GAME_CONFIG;
+    if (!this.stageEnemies || this.stageEnemies.length === 0) return;
+
+    const count = 3 + Math.floor(Math.random() * 3); // 3 ~ 5体
+    const margin = 60;
+    const usableW = WIDTH - margin * 2;
+    const sliceW = usableW / count;
+    const indices = Array.from({ length: count }, (_, idx) => idx);
+    for (let i = indices.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [indices[i], indices[j]] = [indices[j], indices[i]];
+    }
+
+    let delay = 0;
+    for (let i = 0; i < count; i++) {
+      const slotIdx = indices[i];
+      const spawnX = margin + sliceW * slotIdx + (0.2 + Math.random() * 0.6) * sliceW;
+      const typeName = this.stageEnemies[Math.floor(Math.random() * this.stageEnemies.length)];
+      if (i > 0) {
+        delay += 0.35 + Math.random() * 0.65;
+      }
+      if (delay <= 0) {
+        this.spawnSingleSummonedEnemy(typeName, spawnX, enemies);
+      } else {
+        this.pendingSummons.push({ typeName, spawnX, delay });
+      }
+    }
+  }
+
+  spawnSingleSummonedEnemy(typeName, spawnX, enemies) {
+    if (enemies.length >= Math.max(this.spawnLimit, 7)) return;
+    const def = ENEMIES[typeName];
+    if (!def) return;
+    enemies.push(new Enemy(def, spawnX));
+  }
+
+  updateFogState(dt) {
+    if (this.isDefeated()) {
+      this.fogLevel = Math.max(0, this.fogLevel - dt * 0.8);
+      return;
+    }
+    if (this.fogRampActive) {
+      this.fogRampTimer += dt;
+      this.fogLevel = ColorUtils.clamp(this.fogRampTimer / 5.0, 0, 1);
+      if (this.fogRampTimer >= 5.0) {
+        this.fogRampActive = false;
+        this.fogLevel = 1;
+        this.fogHoldTimer = 20.0;
+      }
+    } else if (this.fogHoldTimer > 0) {
+      this.fogHoldTimer = Math.max(0, this.fogHoldTimer - dt);
+      this.fogLevel = 1;
+    } else if (this.fogLevel > 0) {
+      this.fogLevel = Math.max(0, this.fogLevel - dt / 1.5);
+    }
+  }
+
+  /**
+   * 稲妻攻撃中のパドル当たり判定（1斉射につき各プレイヤー最大1回4ダメージ）
+   */
+  applyLightningStrikeHits(paddles, effectsManager, onDamagePaddle) {
+    const { COLORS } = GAME_CONFIG;
+    const boltHalfW = 11;
+    for (const p of paddles) {
+      if (!p || p.hp <= 0 || p.invincibleTimer > 0) continue;
+      if (this.attackHitSlots.has(p.slot)) continue;
+      const pLeft = p.x - p.currentWidth / 2;
+      const pRight = p.x + p.currentWidth / 2;
+      for (const bolt of this.lightningBolts) {
+        const topY = this.getCloudBottomAt(bolt.x);
+        if (p.y + p.height / 2 >= topY && bolt.x + boltHalfW >= pLeft && bolt.x - boltHalfW <= pRight) {
+          this.attackHitSlots.add(p.slot);
+          if (onDamagePaddle) {
+            onDamagePaddle(p, 4);
+          }
+          if (effectsManager) {
+            effectsManager.spawnCircleParticles(bolt.x, p.y, COLORS.red, 10, 50, 175);
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  update(dt, context) {
+    const { COLORS, HEIGHT } = GAME_CONFIG;
+    const {
+      paddles = [],
+      enemies = [],
+      enemyBullets = [],
+      effectsManager,
+      onDamagePaddle,
+      onScreenShake,
+      onBarrageSpawn
+    } = context || {};
+
+    this.idleClock += dt;
+    if (this.hitCooldown > 0) {
+      this.hitCooldown = Math.max(0, this.hitCooldown - dt);
+    }
+
+    this.updateFogState(dt);
+
+    if (this.isDefeated()) {
+      this.pendingSummons = [];
+      if (this.phase !== 'defeated') {
+        this.startDefeatAnimation();
+      }
+      const duration = this.defeatDuration || 5.0;
+      this.phaseTimer += dt;
+      const u = ColorUtils.clamp(this.phaseTimer / duration, 0, 1);
+      const retractEase = 0.35 * u + 0.65 * (u * u * (3 - 2 * u));
+      this.bodyOffsetY = this.defeatStartOffsetY + (-250 - this.defeatStartOffsetY) * retractEase;
+
+      if (u < 1) {
+        this.defeatSmokeTimer -= dt;
+        if (this.defeatSmokeTimer <= 0 && effectsManager) {
+          this.defeatSmokeTimer = 0.14 + Math.random() * 0.08;
+          const puff = this.puffs[Math.floor(Math.random() * this.puffs.length)];
+          if (puff) {
+            effectsManager.spawnPulse({
+              kind: 'circle',
+              x: puff.x + (Math.random() - 0.5) * 44,
+              y: Math.max(16, puff.y + (Math.random() - 0.5) * 32),
+              radius: 26 + Math.random() * 14,
+              color: COLORS.white,
+              duration: 0.45,
+              maxScale: 2.0
+            });
+          }
+        }
+      }
+
+      const tb = this.getTrembleOffset();
+      this.syncPuffPositions(tb.x, tb.y);
+      return;
+    }
+
+    if (this.introProgress < 1) {
+      this.trembleAmp = 0;
+      this.syncPuffPositions(0, 0);
+      return;
+    }
+
+    // 遅延召喚消化
+    for (let i = this.pendingSummons.length - 1; i >= 0; i--) {
+      this.pendingSummons[i].delay -= dt;
+      if (this.pendingSummons[i].delay <= 0) {
+        const item = this.pendingSummons.splice(i, 1)[0];
+        this.spawnSingleSummonedEnemy(item.typeName, item.spawnX, enemies);
+      }
+    }
+
+    this.phaseTimer += dt;
+
+    if (this.phase === 'cooldown') {
+      this.trembleAmp = 0;
+      if (this.phaseTimer >= this.cooldownDuration) {
+        this.startNextCycleStep(paddles);
+      }
+    } else if (this.phase === 'rain_attack') {
+      this.rainSpawnTimer -= dt;
+      while (this.rainSpawnTimer <= 0 && this.phaseTimer < 1.85) {
+        this.rainSpawnTimer += 0.11;
+        this.spawnRainBullets(enemyBullets, onBarrageSpawn);
+      }
+      if (this.phaseTimer >= 1.95) {
+        this.enterCooldown(this.attackCooldown);
+      }
+    } else if (this.phase === 'lightning_telegraph') {
+      if (this.phaseTimer >= 2.0) {
+        this.phase = 'lightning_strike';
+        this.phaseTimer = 0;
+        this.trembleAmp = 6.5;
+        this.attackHitSlots = new Set();
+        if (onScreenShake) {
+          onScreenShake(0.14, 6.5);
+        }
+        if (effectsManager) {
+          for (const bolt of this.lightningBolts) {
+            const topY = this.getCloudBottomAt(bolt.x);
+            effectsManager.spawnCircleParticles(bolt.x, topY, COLORS.yellow, 6, 40, 150);
+          }
+        }
+        this.applyLightningStrikeHits(paddles, effectsManager, onDamagePaddle);
+      }
+    } else if (this.phase === 'lightning_strike') {
+      this.applyLightningStrikeHits(paddles, effectsManager, onDamagePaddle);
+      if (this.phaseTimer >= 0.45) {
+        this.enterCooldown(this.attackCooldown);
+      }
+    } else if (this.phase === 'summon') {
+      if (onScreenShake) {
+        onScreenShake(0.08, 4.2);
+      }
+      if (!this.summonTriggered && this.phaseTimer >= 0.82) {
+        this.summonTriggered = true;
+        this.spawnSummonedEnemies(enemies);
+      }
+      if (this.phaseTimer >= 1.25) {
+        this.enterCooldown(this.attackCooldown);
+      }
+    } else if (this.phase === 'fog_cast') {
+      if (onScreenShake) {
+        onScreenShake(0.08, 3.2);
+      }
+      if (this.phaseTimer >= 5.0) {
+        this.enterCooldown(this.attackCooldown);
+      }
+    }
+
+    const tb = this.getTrembleOffset();
+    this.syncPuffPositions(tb.x, tb.y);
+  }
+
+  updateClient(dt) {
+    this.idleClock += dt;
+    this.phaseTimer += dt;
+
+    if (this._hasSnapInterp && this._interpFrom && this._interpTo) {
+      this._interpElapsed += dt;
+      const alpha = this._interpDuration > 0
+        ? ColorUtils.clamp(this._interpElapsed / this._interpDuration, 0, 1)
+        : 1;
+      const lerp = (a, b) => a + (b - a) * alpha;
+      const nextIntro = lerp(this._interpFrom.introProgress, this._interpTo.introProgress);
+      const easedIntro = 1 - Math.pow(1 - ColorUtils.clamp(nextIntro, 0, 1), 3);
+      this.introProgress = nextIntro;
+      this.introOffsetY = -230 * (1 - easedIntro);
+      this.fogLevel = lerp(this._interpFrom.fogLevel, this._interpTo.fogLevel);
+      this.trembleAmp = lerp(this._interpFrom.trembleAmp, this._interpTo.trembleAmp);
+    }
+
+    if (this.isDefeated()) {
+      const duration = this.defeatDuration || 5.0;
+      const u = ColorUtils.clamp(this.phaseTimer / duration, 0, 1);
+      const retractEase = 0.35 * u + 0.65 * (u * u * (3 - 2 * u));
+      this.bodyOffsetY = -250 * retractEase;
+    } else {
+      this.bodyOffsetY = 0;
+    }
+
+    const tb = this.getTrembleOffset();
+    this.syncPuffPositions(tb.x, tb.y);
+  }
+
+  applyDamageAtPuff(puffIndex, pulseColor, effectsManager, onScore, cooldown = 0.08) {
+    if (this.hp <= 0 || this.hitCooldown > 0) return false;
+    const { COLORS } = GAME_CONFIG;
+    this.hitCooldown = cooldown;
+    this.hp = Math.max(0, this.hp - 1);
+
+    const puff = this.puffs[puffIndex] || this.puffs[0];
+    if (effectsManager && puff) {
+      effectsManager.spawnPulse({
+        kind: 'circle',
+        target: puff,
+        x: puff.x,
+        y: puff.y,
+        radius: puff.r,
+        color: pulseColor,
+        duration: this.hp > 0 ? 0.42 : 0.55,
+        maxScale: this.hp > 0 ? 1.45 : 2.0
+      });
+    }
+
+    if (this.hp <= 0) {
+      this.startDefeatAnimation();
+      if (effectsManager && puff) {
+        effectsManager.spawnCircleParticles(puff.x, Math.max(40, puff.y), COLORS.white, 22, 60, 220);
+      }
+      if (onScore) onScore(2000);
+    } else if (onScore) {
+      onScore(100);
+    }
+    return true;
+  }
+
+  handleSwingCircleCollision(cx, cy, cr, effectsManager, onScore) {
+    if (this.isDefeated() || this.introProgress < 1 || this.hitCooldown > 0) return false;
+    const { COLORS } = GAME_CONFIG;
+    for (let i = 0; i < this.puffs.length; i++) {
+      const p = this.puffs[i];
+      if (Math.hypot(cx - p.x, cy - p.y) <= cr + p.r) {
+        return this.applyDamageAtPuff(i, COLORS.white, effectsManager, onScore, 0.22);
+      }
+    }
+    return false;
+  }
+
+  canTakeCrackDamage() {
+    return !this.isDefeated() && this.introProgress >= 1 && this.hp > 1;
+  }
+
+  applyCrackDamage(effectsManager, onScore) {
+    if (!this.canTakeCrackDamage()) return null;
+    const { COLORS } = GAME_CONFIG;
+    const idx = Math.floor(Math.random() * this.puffs.length);
+    this.hitCooldown = 0;
+    const applied = this.applyDamageAtPuff(idx, COLORS.white, effectsManager, onScore, 0);
+    const puff = this.puffs[idx] || this.puffs[0];
+    return applied && puff ? { x: puff.x, y: puff.y } : null;
+  }
+
+  handleBallCollision(ball, effectsManager, onScore) {
+    if (this.isDefeated() || this.introProgress < 1) return false;
+    const { COLORS, BALL } = GAME_CONFIG;
+    const isCyanBall = ball.effects.cyan > 0;
+    const pulseColor = isCyanBall ? COLORS.cyan : COLORS.white;
+
+    for (let i = 0; i < this.puffs.length; i++) {
+      const c = this.puffs[i];
+      const dx = ball.x - c.x;
+      const dy = ball.y - c.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist <= ball.radius + c.r) {
+        const nx = dx / (dist || 1);
+        const ny = dy / (dist || 1);
+        this.reflectBall(ball, c.x + nx * (c.r + ball.radius + 2), c.y + ny * (c.r + ball.radius + 2), nx, ny, BALL);
+        this.applyDamageAtPuff(i, pulseColor, effectsManager, onScore, 0.08);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  reflectBall(ball, newX, newY, nx, ny, BALL) {
+    ball.spawningFromCenter = false;
+    const prevVy = ball.vy;
+    const speed = Math.hypot(ball.vx, ball.vy) || BALL.BASE_SPEED;
+    ball.vx = nx * speed;
+    ball.vy = ny * speed;
+    if (ball.effects.yellow <= 0) {
+      ball.clampVerticalAngle(speed);
+    } else if (ball.effects.green > 0 && prevVy < 0 && ball.vy > 0) {
+      ball.vy /= BALL.GREEN_SPEED_MULTIPLIER;
+    }
+    ball.x = ColorUtils.clamp(newX, ball.radius, GAME_CONFIG.WIDTH - ball.radius);
+    ball.y = Math.max(ball.radius, newY);
+  }
+
+  _drawLightningBoltPath(ctx, bx, startY, endY, seed, flickerBucket) {
+    const segs = 14;
+    const stepY = (endY - startY) / segs;
+    let state = (seed ^ ((flickerBucket * 2654435761) >>> 0)) >>> 0;
+    const nextRand = () => {
+      state = (state * 1664525 + 1013904223) >>> 0;
+      return (state & 0xffff) / 0xffff;
+    };
+    ctx.beginPath();
+    ctx.moveTo(bx, startY);
+    for (let i = 1; i < segs; i++) {
+      const y = startY + stepY * i;
+      const offset = (nextRand() - 0.5) * 32;
+      ctx.lineTo(bx + offset, y);
+    }
+    ctx.lineTo(bx, endY);
+  }
+
+  render(ctx) {
+    if (this.isDefeated() && !this.isDefeating()) return;
+    const { COLORS, HEIGHT } = GAME_CONFIG;
+
+    // 1. レーザー予告（2秒間表示、500ms前に白->赤へ変化開始）
+    if (this.phase === 'lightning_telegraph' && this.lightningBolts.length > 0) {
+      const elapsed = ColorUtils.clamp(this.phaseTimer, 0, 2.0);
+      const redT = elapsed <= 1.5 ? 0 : ColorUtils.clamp((elapsed - 1.5) / 0.5, 0, 1);
+      const lineColor = redT <= 0 ? COLORS.white : ColorUtils.lerpColor(COLORS.white, COLORS.red, redT);
+      ctx.save();
+      ctx.strokeStyle = lineColor;
+      ctx.lineWidth = 2.4;
+      if (typeof ctx.setLineDash === 'function') {
+        ctx.setLineDash([7, 7]);
+        ctx.lineDashOffset = -(elapsed * 160);
+      }
+      for (const bolt of this.lightningBolts) {
+        const startY = this.getCloudBottomAt(bolt.x);
+        ctx.beginPath();
+        ctx.moveTo(bolt.x, startY);
+        ctx.lineTo(bolt.x, HEIGHT);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // 2. 稲妻攻撃（同時に複数本の稲妻を真下へ放つ）
+    if (this.phase === 'lightning_strike' && this.lightningBolts.length > 0) {
+      const u = ColorUtils.clamp(this.phaseTimer / 0.45, 0, 1);
+      const flickerBucket = Math.floor(this.phaseTimer / 0.045);
+      const outerColor = flickerBucket % 2 === 0 ? COLORS.yellow : COLORS.red;
+      ctx.save();
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      for (const bolt of this.lightningBolts) {
+        const startY = this.getCloudBottomAt(bolt.x);
+        this._drawLightningBoltPath(ctx, bolt.x, startY, HEIGHT, bolt.seed, flickerBucket);
+        ctx.globalAlpha = Math.max(0, 0.72 * (1 - u * 0.75));
+        ctx.strokeStyle = outerColor;
+        ctx.lineWidth = Math.max(2, 16 * (1 - u * 0.8));
+        ctx.stroke();
+
+        this._drawLightningBoltPath(ctx, bolt.x, startY, HEIGHT, bolt.seed, flickerBucket);
+        ctx.globalAlpha = Math.max(0, 1 - u * 0.45);
+        ctx.strokeStyle = COLORS.white;
+        ctx.lineWidth = Math.max(1.5, 6.5 * (1 - u * 0.7));
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // 3. 結合された黒い雲（1パス目で白外枠・2パス目で黒塗りし、重なりの境界線を消す）
+    ctx.save();
+    ctx.fillStyle = COLORS.white;
+    for (const p of this.puffs) {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r + 2.8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = '#000000';
+    for (const p of this.puffs) {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  renderFog(ctx) {
+    if (this.fogLevel <= 0.005) return;
+    const { WIDTH, HEIGHT } = GAME_CONFIG;
+    const lvl = ColorUtils.clamp(this.fogLevel, 0, 1);
+
+    ctx.save();
+    ctx.fillStyle = '#b4bfd0';
+    ctx.globalAlpha = 0.76 * lvl;
+    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+    // 視界を遮る漂う霧バンク
+    const bandCount = 5;
+    ctx.fillStyle = '#dce4ef';
+    for (let i = 0; i < bandCount; i++) {
+      const dir = i % 2 === 0 ? 1 : -1;
+      const drift = ((this.idleClock * (22 + i * 7) * dir) % (WIDTH + 400));
+      const cx = ((drift + i * 190) % (WIDTH + 400)) - 200;
+      const cy = 170 + i * 155;
+      const r = 185 + (i % 3) * 35;
+      ctx.globalAlpha = (0.18 + (i % 2) * 0.06) * lvl;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  serialize() {
+    const r2 = (v) => Math.round(v * 100) / 100;
+    const r3 = (v) => Math.round(v * 1000) / 1000;
+    return [
+      'cloud',
+      this.phase,
+      r2(this.phaseTimer),
+      r3(this.introProgress),
+      this.hp,
+      this.maxHp,
+      r3(this.fogLevel),
+      r2(this.trembleAmp),
+      this.lightningBolts.map((b) => [Math.round(b.x), b.seed])
+    ];
+  }
+
+  applySnapshot(data, interpDuration = null) {
+    if (!Array.isArray(data) || data[0] !== 'cloud') return;
+    const [
+      ,
+      phase,
+      phaseTimer,
+      introProgress,
+      hp,
+      maxHp,
+      fogLevel,
+      trembleAmp,
+      bolts
+    ] = data;
+
+    this.phase = phase || 'cooldown';
+    this.phaseTimer = phaseTimer || 0;
+    this.hp = hp;
+    this.maxHp = maxHp;
+    this.lightningBolts = Array.isArray(bolts)
+      ? bolts.map((b) => ({ x: b[0], seed: b[1] }))
+      : [];
+
+    const targetState = {
+      introProgress: introProgress !== undefined ? introProgress : 1,
+      fogLevel: fogLevel || 0,
+      trembleAmp: trembleAmp || 0
+    };
+
+    if (!this._hasSnapInterp || !(interpDuration > 0)) {
+      this._hasSnapInterp = true;
+      this.setIntroProgress(targetState.introProgress);
+      this.fogLevel = targetState.fogLevel;
+      this.trembleAmp = targetState.trembleAmp;
+      this._interpFrom = { ...targetState };
+      this._interpTo = { ...targetState };
+      this._interpElapsed = 1;
+      this._interpDuration = interpDuration || 0.042;
+      return;
+    }
+
+    this._interpFrom = {
+      introProgress: this.introProgress,
+      fogLevel: this.fogLevel,
+      trembleAmp: this.trembleAmp
+    };
+    this._interpTo = targetState;
+    this._interpElapsed = 0;
+    this._interpDuration = interpDuration;
+  }
+}
+
+function createBossForStage(stageData, playerCount = 1) {
+  if (stageData && stageData.name === 'snake') {
+    return new SnakeBoss(stageData, playerCount);
+  }
+  if (stageData && stageData.name === 'cloud') {
+    return new CloudBoss(stageData, playerCount);
+  }
+  return new BigfootBoss(stageData, playerCount);
 }
 

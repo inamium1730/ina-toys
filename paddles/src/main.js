@@ -30,6 +30,7 @@
   const backgroundEffect = new BackgroundEffect();
 
   const DAMAGE_SHAKE_DURATION = 0.11;
+  const CRACK_SHAKE_DURATION = 0.14;
   const NICKNAME_STORAGE_KEY = 'paddles_nickname';
 
   const game = {
@@ -91,7 +92,7 @@
 
   function buildSkillIconSvg(skillKey, iconSize = 0) {
     if (typeof document === 'undefined' || typeof document.createElementNS !== 'function') return null;
-    if (skillKey !== 'swing') return null;
+    if (skillKey !== 'swing' && skillKey !== 'crack') return null;
     const ns = 'http://www.w3.org/2000/svg';
     const svg = document.createElementNS(ns, 'svg');
     svg.setAttribute('viewBox', '0 0 32 32');
@@ -102,6 +103,19 @@
       svg.setAttribute('width', String(iconSize));
       svg.setAttribute('height', String(iconSize));
     }
+
+    if (skillKey === 'crack') {
+      svg.setAttribute('id', 'mdi-bomb');
+      svg.setAttribute('viewBox', '0 0 24 24');
+      svg.setAttribute('data-iconid', '3be5bd9a');
+      svg.setAttribute('data-svgname', 'Bomb');
+      const path = document.createElementNS(ns, 'path');
+      path.setAttribute('d', 'M11.25,6A3.25,3.25 0 0,1 14.5,2.75A3.25,3.25 0 0,1 17.75,6C17.75,6.42 18.08,6.75 18.5,6.75C18.92,6.75 19.25,6.42 19.25,6V5.25H20.75V6A2.25,2.25 0 0,1 18.5,8.25A2.25,2.25 0 0,1 16.25,6A1.75,1.75 0 0,0 14.5,4.25A1.75,1.75 0 0,0 12.75,6H14V7.29C16.89,8.15 19,10.83 19,14A7,7 0 0,1 12,21A7,7 0 0,1 5,14C5,10.83 7.11,8.15 10,7.29V6H11.25M22,6H24V7H22V6M19,4V2H20V4H19M20.91,4.38L22.33,2.96L23.04,3.67L21.62,5.09L20.91,4.38Z');
+      path.setAttribute('fill', '#ffffff');
+      svg.appendChild(path);
+      return svg;
+    }
+
     const pts = [];
     const steps = 120;
     const turns = 2.5;
@@ -427,6 +441,134 @@
     return true;
   }
 
+  function spawnCrackExplosion(x, y, baseRadius = 32) {
+    effectsManager.spawnPulse({
+      kind: 'crack',
+      x,
+      y,
+      radius: baseRadius,
+      angle: Math.random() * Math.PI * 2,
+      color: COLORS.white,
+      duration: 0.42,
+      maxScale: 1.55
+    });
+    effectsManager.spawnCircleParticles(x, y, COLORS.white, 10, 60, 210);
+    effectsManager.spawnCircleParticles(x, y, COLORS.yellow, 6, 40, 150);
+  }
+
+  function executeCrackSkill() {
+    const count = 4 + Math.floor(Math.random() * 3); // 4 ~ 6 のランダム整数
+    const stageData = MAPS[game.stageIndex % MAPS.length];
+    const enemyDropChance = Item.getEnemyDropChance(stageData);
+    let didHit = false;
+
+    for (let step = 0; step < count; step++) {
+      // 1. ブロック優先
+      const aliveBlocks = game.blocks.filter((b) => b && b.alive && b.collidable);
+      if (aliveBlocks.length > 0) {
+        const blk = aliveBlocks[Math.floor(Math.random() * aliveBlocks.length)];
+        blk.alive = false;
+        blk.scale = 0;
+        blk.collidable = false;
+        game.score += 100;
+        didHit = true;
+        spawnCrackExplosion(blk.x, blk.y, 30);
+        if (blk.itemType) {
+          maybeSpawnItem(blk.x, blk.y, 1.0, blk.itemType);
+        }
+        if (mp.mode === 'host') {
+          mp.sendGameEvent(NetProto.encodeBlockEvt({
+            op: 0,
+            serverTimeMs: mp.getServerTimeMs(),
+            blockId: blk.id
+          }));
+        }
+        continue;
+      }
+
+      // 2. サプライドロップ優先
+      const aliveDrops = game.supplyDrops.filter((d) => d && d.alive);
+      if (aliveDrops.length > 0) {
+        const drop = aliveDrops[Math.floor(Math.random() * aliveDrops.length)];
+        drop.alive = false;
+        const dIdx = game.supplyDrops.indexOf(drop);
+        if (dIdx !== -1) {
+          game.supplyDrops.splice(dIdx, 1);
+        }
+        game.score += 100;
+        didHit = true;
+        spawnCrackExplosion(drop.x, drop.y, 36);
+        maybeSpawnItem(drop.x, drop.y, 1.0);
+        if (mp.mode === 'host') {
+          mp.sendGameEvent(NetProto.encodeDropEvt({
+            op: 1,
+            serverTimeMs: mp.getServerTimeMs(),
+            id: drop.id
+          }));
+        }
+        continue;
+      }
+
+      // 3. 敵（雑魚敵およびボス、ただしボスのHPは0にしない）
+      const targets = [];
+      for (const en of game.enemies) {
+        if (en && en.health > 0) {
+          targets.push({ kind: 'enemy', enemy: en });
+        }
+      }
+      if (game.boss && game.boss.canTakeCrackDamage && game.boss.canTakeCrackDamage()) {
+        targets.push({ kind: 'boss', boss: game.boss });
+      }
+      if (targets.length === 0) break;
+
+      const chosen = targets[Math.floor(Math.random() * targets.length)];
+      didHit = true;
+      if (chosen.kind === 'enemy') {
+        const en = chosen.enemy;
+        const destroyed = en.hitByBall({ effects: { cyan: 0 } }, effectsManager, false);
+        spawnCrackExplosion(en.x, en.y, Math.max(26, en.currentRadius * 1.45));
+        if (destroyed) {
+          game.score += 150 * en.maxHealth;
+          maybeSpawnItem(en.x, en.y, enemyDropChance);
+          const eIdx = game.enemies.indexOf(en);
+          if (eIdx !== -1) {
+            game.enemies.splice(eIdx, 1);
+          }
+          if (mp.mode === 'host') {
+            mp.sendGameEvent(NetProto.encodeEnemyEvt({
+              op: 3,
+              serverTimeMs: mp.getServerTimeMs(),
+              enemyId: en.id,
+              reason: 0
+            }));
+          }
+        } else if (mp.mode === 'host') {
+          mp.sendGameEvent(NetProto.encodeEnemyEvt({
+            op: 2,
+            serverTimeMs: mp.getServerTimeMs(),
+            enemyId: en.id,
+            health: en.health,
+            x: en.x,
+            y: en.y
+          }));
+        }
+      } else {
+        const hitPos = chosen.boss.applyCrackDamage(
+          effectsManager,
+          (pts) => { game.score += pts; },
+          maybeSpawnItem
+        );
+        if (hitPos) {
+          spawnCrackExplosion(hitPos.x, hitPos.y, 38);
+        }
+      }
+    }
+
+    if (didHit) {
+      triggerCrackScreenShake();
+    }
+  }
+
   function activateSkillOnHost(key) {
     if (!canActivateSkill(key)) return false;
     const def = getSkillDefs()[key];
@@ -437,6 +579,9 @@
     sk.mapUses += 1;
     if (sk.cooldownTimer <= 0 && sk.currentStock < maxStock) {
       sk.cooldownTimer = def.cooldown;
+    }
+    if (key === 'crack') {
+      executeCrackSkill();
     }
     if (mp.mode === 'host') {
       sendHostSnapshot(true);
@@ -797,7 +942,7 @@
           const stageData = MAPS[game.stageIndex % MAPS.length];
           if (phase === 'boss_siren' || phase === 'boss_intro') {
             if (phase === 'boss_intro' && !game.boss) {
-              game.boss = createBossForStage(stageData);
+              game.boss = createBossForStage(stageData, Math.max(1, game.paddles.length || mp.getPlayerCount()));
             }
             game.transition = {
               phase,
@@ -1119,7 +1264,7 @@
   }
 
   function isBossStage(stageData) {
-    return Boolean(stageData && (stageData.map === 'boss' || stageData.name === 'bigfoot' || stageData.name === 'snake'));
+    return Boolean(stageData && (stageData.map === 'boss' || stageData.name === 'bigfoot' || stageData.name === 'snake' || stageData.name === 'cloud'));
   }
 
   function buildStageBlocks(stageData, spawnedImmediately = true) {
@@ -1143,9 +1288,22 @@
             spawning: !spawnedImmediately,
             spawnTimer: 0,
             spawnDuration: 0.32,
-            scale: spawnedImmediately ? 1 : 0
+            scale: spawnedImmediately ? 1 : 0,
+            itemType: null
           });
         }
+      }
+    }
+    const fixedItems = (ITEM && Array.isArray(ITEM.STAGE_BLOCK_ITEMS)) ? ITEM.STAGE_BLOCK_ITEMS : [];
+    if (list.length > 0 && fixedItems.length > 0) {
+      const indices = list.map((_, idx) => idx);
+      for (let i = indices.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [indices[i], indices[j]] = [indices[j], indices[i]];
+      }
+      const assignCount = Math.min(list.length, fixedItems.length);
+      for (let i = 0; i < assignCount; i++) {
+        list[indices[i]].itemType = fixedItems[i];
       }
     }
     return list;
@@ -1199,7 +1357,9 @@
             blockId: blk.id
           }));
         }
-        maybeSpawnItem(blk.x, blk.y, 0.26);
+        if (blk.itemType) {
+          maybeSpawnItem(blk.x, blk.y, 1.0, blk.itemType);
+        }
         break;
       }
     }
@@ -1668,7 +1828,7 @@
       tr.timer += dt;
       if (tr.timer >= 2.4) {
         const nextStageData = MAPS[game.stageIndex % MAPS.length];
-        game.boss = createBossForStage(nextStageData);
+        game.boss = createBossForStage(nextStageData, Math.max(1, game.paddles.length || mp.getPlayerCount()));
         game.boss.setIntroProgress(0);
         tr.phase = 'boss_intro';
         tr.timer = 0;
@@ -1679,7 +1839,7 @@
       const u = ColorUtils.clamp(tr.timer / introDuration, 0, 1);
       if (!game.boss) {
         const nextStageData = MAPS[game.stageIndex % MAPS.length];
-        game.boss = createBossForStage(nextStageData);
+        game.boss = createBossForStage(nextStageData, Math.max(1, game.paddles.length || mp.getPlayerCount()));
       }
       game.boss.setIntroProgress(u);
       if (tr.timer >= introDuration) {
@@ -1761,6 +1921,11 @@
     game.damageFlash = 1.0;
   }
 
+  function triggerCrackScreenShake() {
+    game.shakeTimer = Math.max(game.shakeTimer, CRACK_SHAKE_DURATION);
+    game.shakeMagnitude = Math.max(game.shakeMagnitude, 6.5);
+  }
+
   function damagePaddle(targetPaddle, damageAmount) {
     if (targetPaddle && targetPaddle.takeDamage(damageAmount, effectsManager)) {
       if (targetPaddle.hp <= 0) {
@@ -1789,8 +1954,8 @@
     game.enemies.push(new Enemy(def, spawnX));
   }
 
-  function maybeSpawnItem(x, y, dropChance) {
-    const item = Item.maybeSpawn(x, y, dropChance, game.items, game.purplePaddle);
+  function maybeSpawnItem(x, y, dropChance, forcedType = null) {
+    const item = Item.maybeSpawn(x, y, dropChance, game.items, game.purplePaddle, forcedType);
     if (item) {
       game.items.push(item);
       if (mp.mode === 'host') {
@@ -2062,6 +2227,9 @@
         duration: msg.duration,
         maxScale: msg.maxScale
       }, false);
+      if (msg.kind === 'crack') {
+        triggerCrackScreenShake();
+      }
     } else if (msg.type === 'fx_particles') {
       effectsManager.spawnCircleParticles(
         msg.x,
@@ -2259,7 +2427,7 @@
         en.localAutoFire = !!evt.localAutoFire;
         en.fireTimer = evt.fireTimer !== undefined ? evt.fireTimer : en.fireTimer;
         if (delaySec > 0) {
-          en.updateClient(delaySec, game.enemyBullets);
+          en.updateClient(delaySec, game.enemyBullets, game.paddles);
         }
         game.enemies.push(en);
       } else if (evt.op === 1) {
@@ -2289,7 +2457,7 @@
         en.localAutoFire = true;
         en.fireTimer = en.fire_rate || 1.2;
         if (delaySec > 0) {
-          en.updateClient(delaySec, game.enemyBullets);
+          en.updateClient(delaySec, game.enemyBullets, game.paddles);
         }
       } else if (evt.op === 2) {
         const en = game.enemies.find((e) => e.id === evt.enemyId);
@@ -2311,6 +2479,37 @@
         game.enemies = game.enemies.filter((e) => e.id !== evt.enemyId);
       } else if (evt.op === 4) {
         game.enemies = [];
+      } else if (evt.op === 5) {
+        const en = game.enemies.find((e) => e.id === evt.enemyId);
+        if (en) {
+          en.x = evt.x;
+          en.y = evt.y;
+          en.vx = evt.vx;
+          en.vy = evt.vy;
+          if (evt.subOp === 1) {
+            en.laserAngle = evt.angle;
+            en.laserAimLocked = true;
+            en.laserActiveTimer = 0;
+            en.fireTimer = Math.max(0.001, evt.timer || 1.0);
+          } else if (evt.subOp === 2) {
+            en.aimedFallTargetSlot = evt.targetSlot;
+            if (evt.phaseCode === 1) {
+              en.aimedFallPhase = 'charging';
+              en.aimedFallTimer = Math.max(0.001, evt.timer || 1.0);
+              en.vx = 0;
+              en.vy = 0;
+            } else if (evt.phaseCode === 2) {
+              en.aimedFallPhase = 'diving';
+              en.vy = evt.vy || 1150;
+            } else {
+              en.aimedFallPhase = 'aiming';
+              en.fireTimer = evt.timer || en.fireTimer;
+            }
+          }
+          if (delaySec > 0) {
+            en.updateClient(delaySec, game.enemyBullets, game.paddles);
+          }
+        }
       }
       return;
     }
@@ -2543,10 +2742,14 @@
 
     // ボス同期（受信スナップショット間隔に合わせて60fpsで滑らかに補間）
     if (snap.bo) {
-      const expectedBossKind = snap.bo[0] === 'snake' ? 'snake' : 'bigfoot';
+      const expectedBossKind = snap.bo[0] === 'snake'
+        ? 'snake'
+        : (snap.bo[0] === 'cloud' ? 'cloud' : 'bigfoot');
       if (!game.boss || game.boss.id !== expectedBossKind) {
         const stageData = MAPS[snap.si % MAPS.length];
-        game.boss = expectedBossKind === 'snake' ? new SnakeBoss(stageData) : new BigfootBoss(stageData);
+        game.boss = expectedBossKind === 'snake'
+          ? new SnakeBoss(stageData)
+          : (expectedBossKind === 'cloud' ? new CloudBoss(stageData) : new BigfootBoss(stageData));
       }
       game.boss.applySnapshot(snap.bo, Math.max(0.035, guestSnapIntervalEstimate));
     } else {
@@ -2674,7 +2877,7 @@
 
       // エネミー移動＆確定的エネミー（single / spread）のローカル自動発射再現
       for (let i = game.enemies.length - 1; i >= 0; i--) {
-        if (!game.enemies[i].updateClient(dt, game.enemyBullets)) {
+        if (!game.enemies[i].updateClient(dt, game.enemyBullets, game.paddles)) {
           game.enemies.splice(i, 1);
         }
       }
@@ -2715,6 +2918,15 @@
         if (game.boss.phase === 'summon') {
           game.shakeTimer = Math.max(game.shakeTimer, 0.08);
           game.shakeMagnitude = Math.max(game.shakeMagnitude, 4.2);
+        } else if (game.boss.phase === 'fog_cast') {
+          game.shakeTimer = Math.max(game.shakeTimer, 0.08);
+          game.shakeMagnitude = Math.max(game.shakeMagnitude, 3.2);
+        } else if (game.boss.id === 'cloud') {
+          if (game.boss.phase === 'lightning_strike' && game.boss._lastGuestPhase !== 'lightning_strike') {
+            game.shakeTimer = Math.max(game.shakeTimer, 0.14);
+            game.shakeMagnitude = Math.max(game.shakeMagnitude, 6.5);
+          }
+          game.boss._lastGuestPhase = game.boss.phase;
         }
       }
 
@@ -2909,6 +3121,27 @@
           serverTimeMs: mp.getServerTimeMs(),
           bullets: spawned
         }));
+      },
+      onEnemyStateSync: (en, subOp) => {
+        if (!en) return;
+        const phaseCode = en.aimedFallPhase === 'charging' ? 1 : (en.aimedFallPhase === 'diving' ? 2 : 0);
+        const timer = subOp === 1
+          ? en.fireTimer
+          : (en.aimedFallPhase === 'charging' ? en.aimedFallTimer : en.fireTimer);
+        mp.sendGameEvent(NetProto.encodeEnemyEvt({
+          op: 5,
+          serverTimeMs: mp.getServerTimeMs(),
+          enemyId: en.id,
+          subOp,
+          x: en.x,
+          y: en.y,
+          vx: en.vx,
+          vy: en.vy,
+          angle: en.laserAngle || 0,
+          timer,
+          phaseCode,
+          targetSlot: en.aimedFallTargetSlot
+        }));
       }
     } : null;
 
@@ -3042,9 +3275,16 @@
 
       if (b.homingMode === 'decel' && (b.waitAfterStop || 0) >= (b.waitTarget ?? 1.0)) {
         const alivePaddles = game.paddles.filter((pl) => pl && pl.hp > 0);
-        const picked = alivePaddles.length > 0
-          ? alivePaddles[Math.floor(Math.random() * alivePaddles.length)]
-          : { x: WIDTH / 2, y: PADDLE.Y };
+        const candidates = alivePaddles.length > 0 ? alivePaddles : [{ x: WIDTH / 2, y: PADDLE.Y }];
+        const validTargets = candidates.filter((pl) => Enemy.isAimAngleValid(pl.x - b.x, pl.y - b.y));
+        if (validTargets.length === 0) {
+          // 角度がつきすぎている場合や上向きに射撃しようとしている場合は発射しない
+          effectsManager.spawnCircleParticles(b.x, b.y, COLORS.white, 5, 25, 80);
+          if (b.id !== undefined) hitRemovedBulletIds.push(b.id);
+          game.enemyBullets.splice(i, 1);
+          continue;
+        }
+        const picked = validTargets[Math.floor(Math.random() * validTargets.length)];
         const angle = Math.atan2(picked.y - b.y, picked.x - b.x);
         b.homingMode = 'accel';
         b.angle = angle;
@@ -3133,6 +3373,7 @@
       onScore: (pts) => {
         game.score += pts;
       },
+      enemyDropChance: Item.getEnemyDropChance(stageData),
       onSpawnItem: maybeSpawnItem,
       onClearPurplePaddle: () => {
         game.purplePaddle = null;
@@ -3282,7 +3523,7 @@
     ctx.clearRect(0, 0, WIDTH, HEIGHT);
 
     ctx.save();
-    const damageShake = game.shakeTimer > 0 ? (game.shakeTimer / DAMAGE_SHAKE_DURATION) * game.shakeMagnitude : 0;
+    const damageShake = game.shakeTimer > 0 ? Math.min(1, game.shakeTimer / DAMAGE_SHAKE_DURATION) * game.shakeMagnitude : 0;
     if (damageShake > 0) {
       const sx = (Math.random() * 2 - 1) * damageShake;
       const sy = (Math.random() * 2 - 1) * damageShake;
@@ -3467,6 +3708,11 @@
 
     // 10. パーティクル
     effectsManager.renderParticles(ctx);
+
+    // 11. ステージ30ボス (cloud) の霧エフェクト
+    if (game.boss && typeof game.boss.renderFog === 'function') {
+      game.boss.renderFog(ctx);
+    }
   }
 
   function renderTitleText(alpha = 1) {

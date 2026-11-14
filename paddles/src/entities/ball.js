@@ -287,7 +287,9 @@ class Ball {
           blk.alive = false;
           onScore(100);
           effectsManager.spawnCircleParticles(blk.x, blk.y, COLORS.white, 7, 35, 130);
-          onSpawnItem(blk.x, blk.y, 0.26);
+          if (blk.itemType && onSpawnItem) {
+            onSpawnItem(blk.x, blk.y, 1.0, blk.itemType);
+          }
           if (context.onBlockDestroyed) context.onBlockDestroyed(blk);
 
           // 水色ボールはブロックに当たっても反射せず貫通する
@@ -358,8 +360,9 @@ class Ball {
           }
 
           if (destroyed) {
+            const enemyDropChance = context.enemyDropChance !== undefined ? context.enemyDropChance : 0.42;
             onScore(150 * enemy.maxHealth);
-            onSpawnItem(enemy.x, enemy.y, 0.42);
+            onSpawnItem(enemy.x, enemy.y, enemyDropChance);
             if (context.onEnemyEvent) context.onEnemyEvent(enemy, true);
             enemies.splice(eIdx, 1);
           } else if (context.onEnemyEvent) {
@@ -499,8 +502,9 @@ class Ball {
           const destroyed = enemy.hitByBall(this, effectsManager, false);
           enemy.hitCooldown = 0.2;
           if (destroyed) {
+            const enemyDropChance = context.enemyDropChance !== undefined ? context.enemyDropChance : 0.42;
             if (onScore) onScore(150 * enemy.maxHealth);
-            if (onSpawnItem) onSpawnItem(enemy.x, enemy.y, 0.42);
+            if (onSpawnItem) onSpawnItem(enemy.x, enemy.y, enemyDropChance);
             if (context.onEnemyEvent) context.onEnemyEvent(enemy, true);
             enemies.splice(eIdx, 1);
           } else if (context.onEnemyEvent) {

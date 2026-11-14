@@ -186,9 +186,141 @@ class ShapeRenderer {
     ctx.restore();
   }
 
+  static drawArrowPath(ctx, x, y, radius, rotation = 0) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(rotation);
+    const r = radius;
+    const pts = [
+      [0, 0.96],
+      [0.84, -0.72],
+      [0, -0.26],
+      [-0.84, -0.72]
+    ];
+    ctx.beginPath();
+    for (let i = 0; i < pts.length; i++) {
+      const px = pts[i][0] * r;
+      const py = pts[i][1] * r;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.restore();
+  }
+
+  static drawWideArrowPath(ctx, x, y, radius, rotation = 0) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(rotation);
+    const r = radius;
+    // 下向きの "➽"（広がった尾翼と鋭いワイド矢印）
+    const pts = [
+      [0, 0.98],
+      [0.92, -0.06],
+      [0.30, 0.14],
+      [0.50, -0.88],
+      [0, -0.58],
+      [-0.50, -0.88],
+      [-0.30, 0.14],
+      [-0.92, -0.06]
+    ];
+    ctx.beginPath();
+    for (let i = 0; i < pts.length; i++) {
+      const px = pts[i][0] * r;
+      const py = pts[i][1] * r;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.restore();
+  }
+
+  static drawScissorsShape(ctx, x, y, radius, rotation = 0, color = '#ffffff', hollow = false) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(rotation);
+    const r = radius;
+
+    // 交差する下向き2枚の刃
+    const blades = [
+      [
+        [-0.24, -0.34],
+        [-0.04, -0.14],
+        [0.46, 0.94],
+        [0.14, 0.62],
+        [-0.36, -0.18]
+      ],
+      [
+        [0.24, -0.34],
+        [0.04, -0.14],
+        [-0.46, 0.94],
+        [-0.14, 0.62],
+        [0.36, -0.18]
+      ]
+    ];
+
+    for (const pts of blades) {
+      ctx.beginPath();
+      for (let i = 0; i < pts.length; i++) {
+        const px = pts[i][0] * r;
+        const py = pts[i][1] * r;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      if (hollow) {
+        ctx.fillStyle = '#000000';
+        ctx.fill();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2.4;
+        ctx.lineJoin = 'miter';
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = color;
+        ctx.fill();
+      }
+    }
+
+    // 上部左右の持ち手リング
+    const ringCenters = [
+      [-0.46 * r, -0.52 * r],
+      [0.46 * r, -0.52 * r]
+    ];
+    const outerR = 0.33 * r;
+    const innerR = 0.14 * r;
+    for (const [cx, cy] of ringCenters) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, outerR, 0, Math.PI * 2, false);
+      ctx.arc(cx, cy, innerR, 0, Math.PI * 2, true);
+      if (hollow) {
+        ctx.fillStyle = '#000000';
+        ctx.fill('evenodd');
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2.4;
+        ctx.beginPath();
+        ctx.arc(cx, cy, outerR, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(cx, cy, innerR, 0, Math.PI * 2);
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = color;
+        ctx.fill('evenodd');
+      }
+    }
+
+    ctx.restore();
+  }
+
   static drawEnemyShape(ctx, enemyType, x, y, radius, rotation, color = '#ffffff', alpha = 1, hollow = false) {
     ctx.save();
     ctx.globalAlpha = alpha;
+
+    if (enemyType === 'scissors') {
+      ShapeRenderer.drawScissorsShape(ctx, x, y, radius, rotation, color, hollow);
+      ctx.restore();
+      return;
+    }
 
     if (enemyType === 'quadiamond') {
       // 4つのひし形を上下左右に配置 (❖)
@@ -236,6 +368,12 @@ class ShapeRenderer {
       ShapeRenderer.drawSpadePath(ctx, x, y, radius, rotation + Math.PI);
     } else if (enemyType === 'pickaxe') {
       ShapeRenderer.drawPickaxePath(ctx, x, y, radius, rotation);
+    } else if (enemyType === 'arrow') {
+      ShapeRenderer.drawArrowPath(ctx, x, y, radius, rotation);
+    } else if (enemyType === 'sparkle') {
+      ShapeRenderer.drawStarPath(ctx, x, y, radius * 1.06, radius * 0.34, 4, rotation);
+    } else if (enemyType === 'wide_arrow') {
+      ShapeRenderer.drawWideArrowPath(ctx, x, y, radius, rotation);
     } else {
       ShapeRenderer.drawPolygonPath(ctx, x, y, radius, 3, rotation + Math.PI / 2);
     }
