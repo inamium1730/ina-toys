@@ -366,6 +366,7 @@ class NetProto {
       w.u16((p[12] || 0) & 0xffff); // ackSeq
       w.ms16(p[13]);            // respawnTimer
       w.u8(p[14] || 0);         // respawnPenalty
+      w.ms16(p[15] || 0);       // guardTimer
     }
 
     if (s.pp) {
@@ -381,7 +382,9 @@ class NetProto {
 
     if (s.bo) {
       const bo = s.bo;
-      const bossKind = bo[0] === 'snake' ? 1 : (bo[0] === 'cloud' ? 2 : 0);
+      const bossKind = bo[0] === 'snake'
+        ? 1
+        : (bo[0] === 'cloud' ? 2 : (bo[0] === 'dragon' ? 3 : 0));
       w.u8(bossKind);
       if (bossKind === 1) {
         w.tagStr(NetProto.BOSS_PHASES, bo[1]);
@@ -418,6 +421,20 @@ class NetProto {
           w.c10(bt[0]);
           w.u16(bt[1] || 0);
         }
+      } else if (bossKind === 3) {
+        w.tagStr(NetProto.BOSS_PHASES, bo[1]);
+        w.ms16(bo[2]);
+        w.u16((bo[3] !== undefined ? bo[3] : 1) * 1000);
+        w.u16(bo[4]);
+        w.u16(bo[5]);
+        w.u8(bo[6] ? 1 : 0);
+        w.ms16(bo[7]);
+        w.c10(bo[8]);
+        w.c10(bo[9]);
+        w.ang16(bo[10]);
+        w.u32(Math.max(0, Math.round((bo[11] || 0) * 1000)));
+        w.u16(Math.max(0, Math.round((bo[12] !== undefined ? bo[12] : 1) * 1000)));
+        w.c10(bo[13] || 0);
       } else {
         w.tagStr(NetProto.BOSS_PHASES, bo[0]);
         w.ms16(bo[1]);
@@ -498,7 +515,8 @@ class NetProto {
       const ackSeq = r.u16();
       const respawnTimer = r.ms16();
       const respawnPenalty = r.u8();
-      ps[i] = [slot, x, hp, maxHp, cw, effClock, cyan, yellow, green, null, contested, sinceDmg, invinc, ackSeq, respawnTimer, respawnPenalty];
+      const guardTimer = r.ms16();
+      ps[i] = [slot, x, hp, maxHp, cw, effClock, cyan, yellow, green, null, contested, sinceDmg, invinc, ackSeq, respawnTimer, respawnPenalty, guardTimer];
     }
 
     let pp = null;
@@ -554,6 +572,25 @@ class NetProto {
         bo = [
           'cloud', phase, phaseTimer, introProgress,
           hp, maxHp, fogLevel, trembleAmp, bolts
+        ];
+      } else if (bossKind === 3) {
+        const phase = r.tagStr(NetProto.BOSS_PHASES);
+        const phaseTimer = r.ms16();
+        const introProgress = r.u16() / 1000;
+        const hp = r.u16();
+        const maxHp = r.u16();
+        const blinking = r.u8();
+        const blinkTimer = r.ms16();
+        const x = r.c10();
+        const y = r.c10();
+        const bodyAngle = r.ang16();
+        const wingPhase = r.u32() / 1000;
+        const wingSpread = r.u16() / 1000;
+        const aimOffsetX = r.c10();
+        bo = [
+          'dragon', phase, phaseTimer, introProgress,
+          hp, maxHp, blinking, blinkTimer,
+          x, y, bodyAngle, wingPhase, wingSpread, aimOffsetX
         ];
       } else {
         const phase = r.tagStr(NetProto.BOSS_PHASES);
@@ -695,10 +732,18 @@ class NetProto {
         w.u10(speed);
         w.u8(b.damage || 1);
         const hasCustomExplode = Boolean(b.explodeCount && b.explodeCount !== 8);
+        const isArc = b.motionMode === 'arc';
+        const isKnife = b.shape === 'knife' || b.motionMode === 'knife';
+        const isTimedKnife = b.motionMode === 'knife';
+        const isBounce = Boolean(b.bounceWalls);
         const flags = (b.shape === 'spade' ? 1 : 0)
           | ((b.explodeCount === 8) ? 2 : 0)
           | (b.homingMode === 'decel' ? 4 : 0)
-          | (hasCustomExplode ? 8 : 0);
+          | (hasCustomExplode ? 8 : 0)
+          | (b.shape === 'crescent' ? 16 : 0)
+          | (isArc ? 32 : 0)
+          | (isTimedKnife ? 64 : 0)
+          | (isBounce ? 128 : 0);
         w.u8(flags);
         if (flags & 1) {
           w.u10(b.explodeY || 0);
@@ -709,6 +754,19 @@ class NetProto {
         }
         if (flags & 8) {
           w.u8(Math.min(255, Math.max(1, b.explodeCount)));
+        }
+        if (flags & 32) {
+          w.c10(b.arcStartX !== undefined ? b.arcStartX : b.x);
+          w.c10(b.arcStartY !== undefined ? b.arcStartY : b.y);
+          w.c10(b.arcTargetX !== undefined ? b.arcTargetX : b.x);
+          w.c10(b.arcBend || 0);
+          w.ms16(b.arcDur || 1.4);
+          w.ms16(b.arcElapsed || 0);
+        }
+        if (flags & 64) {
+          w.c10(b.knifeHoldX !== undefined ? b.knifeHoldX : b.x);
+          w.c10(b.knifeHoldY !== undefined ? b.knifeHoldY : b.y);
+          w.ms16(b.knifeElapsed || 0);
         }
       }
     } else if (evt.op === 1) {
@@ -745,7 +803,12 @@ class NetProto {
         const speed = r.u10();
         const damage = r.u8();
         const flags = r.pos < r.dv.byteLength ? r.u8() : 0;
-        const shape = (flags & 1) ? 'spade' : undefined;
+        const isTimedKnife = Boolean(flags & 64);
+        const isBounce = Boolean(flags & 128);
+        const isKnife = isTimedKnife || isBounce;
+        const shape = (flags & 1)
+          ? 'spade'
+          : ((flags & 16) ? 'crescent' : (isKnife ? 'knife' : undefined));
         const explodeY = (flags & 1) && r.pos + 2 <= r.dv.byteLength ? r.u10() : undefined;
         let explodeCount = (flags & 2) ? 8 : undefined;
         const isDecel = Boolean(flags & 4);
@@ -753,6 +816,22 @@ class NetProto {
         const waitTarget = isDecel && r.pos + 2 <= r.dv.byteLength ? r.ms16() : undefined;
         if ((flags & 8) && r.pos < r.dv.byteLength) {
           explodeCount = r.u8();
+        }
+        const isArc = Boolean(flags & 32);
+        let arcStartX, arcStartY, arcTargetX, arcBend, arcDur, arcElapsed;
+        if (isArc && r.pos + 12 <= r.dv.byteLength) {
+          arcStartX = r.c10();
+          arcStartY = r.c10();
+          arcTargetX = r.c10();
+          arcBend = r.c10();
+          arcDur = r.ms16();
+          arcElapsed = r.ms16();
+        }
+        let knifeHoldX, knifeHoldY, knifeElapsed;
+        if (isTimedKnife && r.pos + 6 <= r.dv.byteLength) {
+          knifeHoldX = r.c10();
+          knifeHoldY = r.c10();
+          knifeElapsed = r.ms16();
         }
         const vx = Math.cos(angle) * speed;
         const vy = Math.sin(angle) * speed;
@@ -774,7 +853,22 @@ class NetProto {
           decelDuration,
           waitTarget,
           homingTimer: isDecel ? 0 : undefined,
-          waitAfterStop: isDecel ? 0 : undefined
+          waitAfterStop: isDecel ? 0 : undefined,
+          motionMode: isArc ? 'arc' : (isTimedKnife ? 'knife' : undefined),
+          bounceWalls: isBounce,
+          arcStartX,
+          arcStartY,
+          arcTargetX,
+          arcTargetY: isArc ? GAME_CONFIG.PADDLE.Y : undefined,
+          arcBend,
+          arcDur,
+          arcElapsed,
+          knifeHoldX,
+          knifeHoldY,
+          knifeRiseY: isTimedKnife ? 52 : undefined,
+          knifeElapsed,
+          knifeAlpha: isTimedKnife ? 0 : undefined,
+          knifeVisualAngle: isTimedKnife ? angle - Math.PI * 2 : undefined
         };
       }
       evt.bullets = bullets;
@@ -1053,7 +1147,7 @@ class NetProto {
       w.c10(payload.y);
       w.u10(payload.w);
       w.u10(payload.h);
-    } else if (fxType === 'fx_shatter') {
+    } else if (fxType === 'fx_shatter' || fxType === 'fx_shield_shatter') {
       w.c10(payload.x);
       w.c10(payload.y);
       w.u10(payload.w);
@@ -1111,7 +1205,7 @@ class NetProto {
         h: r.u10()
       };
     }
-    if (type === 'fx_shatter') {
+    if (type === 'fx_shatter' || type === 'fx_shield_shatter') {
       const x = r.c10();
       const y = r.c10();
       const w = r.u10();
@@ -1179,26 +1273,33 @@ NetProto.BOSS_PHASES = [
   'tongue_strike', 'tongue_retract', 'retract', 'hidden_wait',
   'dive_peek', 'dive_strike', 'slither_telegraph', 'slither', 'reenter',
   'summon', 'spread_pull', 'spread_thrust', 'spread_recover',
-  'rain_attack', 'lightning_telegraph', 'lightning_strike', 'fog_cast',
+  'rain_attack', 'lightning_telegraph', 'lightning_strike', 'fog_cast', 'box_drop',
+  'fly_spade_up', 'spade_barrage', 'fly_spade_return',
+  'charge_pullback', 'charge_rush_down', 'charge_bottom_wait', 'charge_bottom_peek', 'charge_rush_up', 'charge_return',
+  'knife_attack',
+  'fly_arc_up', 'arc_barrage', 'arc_return_summon',
   'intro', 'defeated'
 ];
-NetProto.SKILL_KEYS = typeof SKILLS !== 'undefined' ? Object.keys(SKILLS) : ['swing', 'crack'];
+NetProto.SKILL_KEYS = typeof SKILLS !== 'undefined' ? Object.keys(SKILLS) : ['swing', 'crack', 'guard'];
 NetProto.ENEMY_NAMES = [
   'triangle', 'square', 'diamond', 'pentagon', 'hexagon', 'club', 'spade', 'quadiamond', 'pickaxe',
-  'arrow', 'sparkle', 'wide_arrow', 'scissors'
+  'arrow', 'sparkle', 'wide_arrow', 'scissors',
+  'prism', 'circle', 'semicircle', 'crescent', 'bomb'
 ];
 NetProto.BULLET_TYPES = [
   'none', 'single', 'spread', 'aimed', 'self_destruction', '3round', 'explode', 'connect',
-  'laser', 'aimed_laser', 'aimed_3round'
+  'laser', 'aimed_laser', 'aimed_3round',
+  'counter', 'slice', 'crescent', 'self_explosion'
 ];
 NetProto.ITEM_TYPES = ['cyan_star', 'yellow_star', 'green_star', 'blue_circle', 'pink_heart', 'purple_square'];
-NetProto.FX_TYPES = ['fx_pulse', 'fx_particles', 'fx_regen', 'fx_shatter', 'paddle_hit'];
+NetProto.FX_TYPES = ['fx_pulse', 'fx_particles', 'fx_regen', 'fx_shatter', 'paddle_hit', 'fx_shield_shatter'];
 NetProto.TARGET_KINDS = ['none', 'paddle', 'ball', 'enemy', 'item', 'purple', 'boss_head', 'boss_circle'];
 NetProto.PULSE_KINDS = ['circle', 'paddle', 'block', 'enemy', 'item', 'purple_paddle', 'boss_head', 'boss_circle', 'rect', 'polygon', 'crack'];
 NetProto.SUB_TYPES = [
   'cyan', 'yellow', 'green', 'white', 'red', 'damage', 'heal', 'pickup',
   'triangle', 'square', 'diamond', 'pentagon', 'hexagon', 'club', 'spade', 'quadiamond', 'pickaxe',
   'arrow', 'sparkle', 'wide_arrow', 'scissors',
+  'prism', 'circle', 'semicircle', 'crescent', 'bomb',
   'cyan_star', 'yellow_star', 'green_star', 'blue_circle', 'pink_heart', 'purple_square'
 ];
 NetProto.COLORS = [

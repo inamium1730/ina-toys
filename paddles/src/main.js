@@ -12,11 +12,57 @@
   const lobbyHint = document.getElementById('lobby-hint');
   const roomControls = document.getElementById('room-controls');
   const copyLinkButton = document.getElementById('copy-link-button');
+  const roomJoinRow = typeof document.getElementById === 'function'
+    ? document.getElementById('room-join-row')
+    : null;
+  const roomCodeInput = typeof document.getElementById === 'function'
+    ? document.getElementById('room-code-input')
+    : null;
+  const roomActionButton = typeof document.getElementById === 'function'
+    ? document.getElementById('room-action-button')
+    : null;
   const roomStatus = document.getElementById('room-status');
   const skillBar = document.getElementById('skill-bar');
   const skillUnlockLayer = typeof document.getElementById === 'function'
     ? document.getElementById('skill-unlock-layer')
     : null;
+
+  let isRoomJoinOpen = false;
+
+  /**
+   * ブラウザのアドレスバー等を含む実際の可視ビューポートに合わせてCSSサイズ変数を同期する
+   */
+  function syncViewportSize() {
+    if (typeof document === 'undefined' || !document.documentElement || !document.documentElement.style) return;
+    const docEl = document.documentElement;
+    const innerW = (typeof window !== 'undefined' && window.innerWidth) || docEl.clientWidth || 0;
+    const innerH = (typeof window !== 'undefined' && window.innerHeight) || docEl.clientHeight || 0;
+    const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+    const activeEl = document.activeElement;
+    const isTyping = Boolean(activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA'));
+    const vvW = vv && vv.width ? vv.width : innerW;
+    const vvH = vv && vv.height ? vv.height : innerH;
+    const useW = Math.min(innerW || vvW, vvW || innerW);
+    const useH = (isTyping && innerH > 0 && vvH < innerH * 0.72)
+      ? innerH
+      : Math.min(innerH || vvH, vvH || innerH);
+    if (useW > 0 && typeof docEl.style.setProperty === 'function') {
+      docEl.style.setProperty('--app-w', `${Math.floor(useW)}px`);
+    }
+    if (useH > 0 && typeof docEl.style.setProperty === 'function') {
+      docEl.style.setProperty('--app-h', `${Math.floor(useH)}px`);
+    }
+  }
+
+  syncViewportSize();
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('resize', syncViewportSize);
+    window.addEventListener('orientationchange', () => setTimeout(syncViewportSize, 60));
+    if (window.visualViewport && typeof window.visualViewport.addEventListener === 'function') {
+      window.visualViewport.addEventListener('resize', syncViewportSize);
+      window.visualViewport.addEventListener('scroll', syncViewportSize);
+    }
+  }
 
   const { WIDTH, HEIGHT, COLORS, PADDLE, BALL, BLOCKS, ITEM, ENEMY } = GAME_CONFIG;
 
@@ -92,7 +138,7 @@
 
   function buildSkillIconSvg(skillKey, iconSize = 0) {
     if (typeof document === 'undefined' || typeof document.createElementNS !== 'function') return null;
-    if (skillKey !== 'swing' && skillKey !== 'crack') return null;
+    if (skillKey !== 'swing' && skillKey !== 'crack' && skillKey !== 'guard') return null;
     const ns = 'http://www.w3.org/2000/svg';
     const svg = document.createElementNS(ns, 'svg');
     svg.setAttribute('viewBox', '0 0 32 32');
@@ -102,6 +148,17 @@
     if (iconSize > 0) {
       svg.setAttribute('width', String(iconSize));
       svg.setAttribute('height', String(iconSize));
+    }
+
+    if (skillKey === 'guard') {
+      svg.setAttribute('id', 'mdi-shield');
+      svg.setAttribute('viewBox', '0 0 24 24');
+      svg.setAttribute('data-svgname', 'Shield');
+      const path = document.createElementNS(ns, 'path');
+      path.setAttribute('d', 'M12,1L3,5V11C3,16.55 6.84,21.74 12,23C17.16,21.74 21,16.55 21,11V5L12,1Z');
+      path.setAttribute('fill', '#ffffff');
+      svg.appendChild(path);
+      return svg;
     }
 
     if (skillKey === 'crack') {
@@ -525,9 +582,36 @@
       didHit = true;
       if (chosen.kind === 'enemy') {
         const en = chosen.enemy;
-        const destroyed = en.hitByBall({ effects: { cyan: 0 } }, effectsManager, false);
+        const destroyed = en.hitByBall({ effects: { cyan: 0 } }, effectsManager, false, game.enemyBullets);
         spawnCrackExplosion(en.x, en.y, Math.max(26, en.currentRadius * 1.45));
-        if (destroyed) {
+        if (typeof en.consumePendingBullets === 'function') {
+          emitSpawnedEnemyBullets(en.consumePendingBullets());
+        }
+        const splitChildren = typeof en.consumePendingSplitEnemies === 'function'
+          ? en.consumePendingSplitEnemies()
+          : [];
+        if (splitChildren.length > 0) {
+          const eIdx = game.enemies.indexOf(en);
+          if (eIdx !== -1) {
+            game.enemies.splice(eIdx, 1);
+          }
+          for (const child of splitChildren) {
+            game.enemies.push(child);
+          }
+          if (mp.mode === 'host') {
+            mp.sendGameEvent(NetProto.encodeEnemyEvt({
+              op: 3,
+              serverTimeMs: mp.getServerTimeMs(),
+              enemyId: en.id,
+              reason: 0
+            }));
+            emitSpawnedEnemies();
+          }
+        } else if (destroyed) {
+          if (en._pendingSelfExplosion) {
+            en._pendingSelfExplosion = false;
+            en.triggerSelfExplosion(effectsManager, game.paddles, damagePaddle, { onBombExplode: triggerBombScreenShake });
+          }
           game.score += 150 * en.maxHealth;
           maybeSpawnItem(en.x, en.y, enemyDropChance);
           const eIdx = game.enemies.indexOf(en);
@@ -569,6 +653,15 @@
     }
   }
 
+  function executeGuardSkill(duration) {
+    const dur = duration > 0 ? duration : 30;
+    for (const p of game.paddles) {
+      if (p && p.hp > 0) {
+        p.activateGuard(dur);
+      }
+    }
+  }
+
   function activateSkillOnHost(key) {
     if (!canActivateSkill(key)) return false;
     const def = getSkillDefs()[key];
@@ -582,6 +675,8 @@
     }
     if (key === 'crack') {
       executeCrackSkill();
+    } else if (key === 'guard') {
+      executeGuardSkill(def.duration);
     }
     if (mp.mode === 'host') {
       sendHostSnapshot(true);
@@ -682,6 +777,45 @@
 
   function getNextBulletId() {
     return nextBulletId++;
+  }
+
+  function emitSpawnedEnemyBullets(spawned) {
+    if (mp.mode !== 'host' || !spawned || spawned.length === 0) return;
+    for (const b of spawned) {
+      if (b.id === undefined) b.id = getNextBulletId();
+    }
+    mp.sendGameEvent(NetProto.encodeBulletEvt({
+      op: 0,
+      serverTimeMs: mp.getServerTimeMs(),
+      bullets: spawned
+    }));
+  }
+
+  function emitSpawnedEnemies() {
+    if (mp.mode !== 'host') return;
+    for (const en of game.enemies) {
+      if (!en._netSpawnSent) {
+        en._netSpawnSent = true;
+        mp.sendGameEvent(NetProto.encodeEnemyEvt({
+          op: 0,
+          serverTimeMs: mp.getServerTimeMs(),
+          id: en.id,
+          name: en.name,
+          x: en.x,
+          y: en.y,
+          vx: en.vx,
+          vy: en.vy,
+          rotation: en.rotation,
+          health: en.health,
+          maxHealth: en.maxHealth,
+          currentRadius: en.currentRadius,
+          bullet_type: en.bullet_type,
+          fire_rate: en.fire_rate,
+          localAutoFire: false,
+          fireTimer: en.fireTimer || 0
+        }));
+      }
+    }
   }
 
   function emitBallEvt(op, ball, source = 0, sourceSlot = null, targetPeer = null) {
@@ -1121,13 +1255,28 @@
     }
   }
 
+  function isBulletOutOfBounds(b) {
+    const padX = b && b.shape === 'knife' ? 460 : 24;
+    const minY = b && b.shape === 'knife' ? -460 : -24;
+    return b.y > HEIGHT + 24 || b.y < minY || b.x < -padX || b.x > WIDTH + padX;
+  }
+
+  function sanitizeRoomCodeInput(raw) {
+    return String(raw || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 6);
+  }
+
   function updateMenuUI() {
     const isPlaying = game.state === 'playing';
     const isEndScreen = game.state === 'gameover' || game.state === 'victory';
+    const inRoom = mp.mode === 'host' || mp.mode === 'guest';
     const hasName = hasValidNickname();
     const isMultiLobby = mp.players && mp.players.length > 1;
     const isLocalReady = !isPlaying && !isEndScreen && !!mp.localReady && (mp.mode === 'guest' || isMultiLobby);
     const canPressPlay = isEndScreen || (hasName && (mp.mode !== 'guest' || mp.connectionStatus === 'connected' || mp.handoffSilent));
+
+    if (inRoom || isPlaying || isEndScreen) {
+      isRoomJoinOpen = false;
+    }
 
     if (playButton) {
       playButton.classList.toggle('hidden', isPlaying);
@@ -1164,14 +1313,41 @@
       roomControls.classList.toggle('hidden', isPlaying);
     }
 
+    const showRoomJoinRow = !isPlaying && !isEndScreen && !inRoom && isRoomJoinOpen;
+
     if (copyLinkButton) {
-      copyLinkButton.disabled = isEndScreen;
-      copyLinkButton.classList.toggle('disabled', isEndScreen);
-      copyLinkButton.classList.toggle('hidden', isEndScreen);
-      copyLinkButton.setAttribute('aria-disabled', String(isEndScreen));
+      const hideCopyBtn = isEndScreen || showRoomJoinRow;
+      const btnLabel = inRoom ? 'Copy invite link' : 'Create or join room';
+      copyLinkButton.disabled = hideCopyBtn;
+      copyLinkButton.classList.toggle('disabled', hideCopyBtn);
+      copyLinkButton.classList.toggle('hidden', hideCopyBtn);
+      copyLinkButton.classList.toggle('in-room', inRoom);
+      copyLinkButton.setAttribute('aria-disabled', String(hideCopyBtn));
+      copyLinkButton.setAttribute('aria-label', btnLabel);
+      copyLinkButton.title = btnLabel;
+    }
+
+    if (roomJoinRow) {
+      roomJoinRow.classList.toggle('hidden', !showRoomJoinRow);
+    }
+
+    if (roomActionButton) {
+      const code = sanitizeRoomCodeInput(roomCodeInput ? roomCodeInput.value : '');
+      const hasAny = code.length > 0;
+      const isComplete = code.length === 6;
+      const actionLabel = !hasAny
+        ? 'Create room'
+        : (isComplete ? 'Join room' : 'Enter 6-character room code');
+      roomActionButton.classList.toggle('is-arrow', hasAny);
+      roomActionButton.classList.toggle('incomplete', hasAny && !isComplete);
+      roomActionButton.disabled = hasAny && !isComplete;
+      roomActionButton.setAttribute('aria-disabled', String(hasAny && !isComplete));
+      roomActionButton.setAttribute('aria-label', actionLabel);
+      roomActionButton.title = actionLabel;
     }
 
     if (roomStatus) {
+      roomStatus.classList.toggle('hidden', showRoomJoinRow);
       if (copyFeedbackTimer) {
         roomStatus.textContent = 'COPIED';
       } else if (mp.mode === 'host' && mp.roomCode) {
@@ -1228,13 +1404,69 @@
     }
   }
 
+  function submitRoomAction() {
+    if (game.state !== 'menu' || mp.mode !== 'solo') return;
+    const code = sanitizeRoomCodeInput(roomCodeInput ? roomCodeInput.value : '');
+    if (code.length === 0) {
+      isRoomJoinOpen = false;
+      if (roomCodeInput) roomCodeInput.value = '';
+      mp.hostRoom();
+      updateMenuUI();
+      return;
+    }
+    if (code.length === 6) {
+      isRoomJoinOpen = false;
+      if (roomCodeInput) roomCodeInput.value = '';
+      mp.joinRoom(code);
+      updateMenuUI();
+    }
+  }
+
+  if (roomCodeInput) {
+    roomCodeInput.addEventListener('input', () => {
+      const sanitized = sanitizeRoomCodeInput(roomCodeInput.value);
+      if (roomCodeInput.value !== sanitized) {
+        roomCodeInput.value = sanitized;
+      }
+      updateMenuUI();
+    });
+
+    roomCodeInput.addEventListener('keydown', (e) => {
+      if (e.code === 'Enter') {
+        e.preventDefault();
+        submitRoomAction();
+      } else if (e.code === 'Escape') {
+        e.preventDefault();
+        isRoomJoinOpen = false;
+        if (typeof roomCodeInput.blur === 'function') {
+          try { roomCodeInput.blur(); } catch (_) {}
+        }
+        updateMenuUI();
+      }
+    });
+  }
+
+  if (roomActionButton) {
+    roomActionButton.addEventListener('click', () => {
+      submitRoomAction();
+    });
+  }
+
   if (copyLinkButton) {
     copyLinkButton.addEventListener('click', async () => {
       if (game.state === 'gameover' || game.state === 'victory') return;
 
-      const inviteUrl = mp.mode === 'guest' && mp.roomCode
-        ? mp.getInviteUrl()
-        : mp.hostRoom();
+      if (mp.mode === 'solo') {
+        isRoomJoinOpen = !isRoomJoinOpen;
+        updateMenuUI();
+        if (isRoomJoinOpen && roomCodeInput && typeof roomCodeInput.focus === 'function') {
+          try { roomCodeInput.focus(); } catch (_) {}
+        }
+        return;
+      }
+
+      const inviteUrl = mp.getInviteUrl();
+      if (!inviteUrl) return;
 
       await copyTextToClipboard(inviteUrl);
 
@@ -1416,6 +1648,10 @@
     if (mp.localReady) {
       mp.setLocalReady(false);
     }
+    if (mp.mode === 'solo') {
+      isRoomJoinOpen = false;
+      if (roomCodeInput) roomCodeInput.value = '';
+    }
     menuVisualPaddles = [];
     syncMenuVisualPaddles(true);
     resetSkillsState();
@@ -1450,7 +1686,7 @@
   }
 
   window.addEventListener('keydown', (e) => {
-    if (document.activeElement === nicknameInput) {
+    if (document.activeElement === nicknameInput || (roomCodeInput && document.activeElement === roomCodeInput)) {
       return;
     }
     if (e.code === 'KeyA' || e.code === 'ArrowLeft') {
@@ -1683,6 +1919,10 @@
     }
   }
 
+  function isAllPaddlesDead() {
+    return game.paddles.length > 0 && game.paddles.every((p) => p.hp <= 0);
+  }
+
   function resetRespawnPenalties() {
     for (const p of game.paddles) {
       p.respawnPenalty = 0;
@@ -1835,12 +2075,14 @@
       }
     } else if (tr.phase === 'boss_intro') {
       tr.timer += dt;
-      const introDuration = 1.0;
-      const u = ColorUtils.clamp(tr.timer / introDuration, 0, 1);
       if (!game.boss) {
         const nextStageData = MAPS[game.stageIndex % MAPS.length];
         game.boss = createBossForStage(nextStageData, Math.max(1, game.paddles.length || mp.getPlayerCount()));
       }
+      const introDuration = (game.boss && typeof game.boss.getIntroDuration === 'function')
+        ? game.boss.getIntroDuration()
+        : 1.0;
+      const u = ColorUtils.clamp(tr.timer / introDuration, 0, 1);
       game.boss.setIntroProgress(u);
       if (tr.timer >= introDuration) {
         game.boss.setIntroProgress(1);
@@ -1915,10 +2157,12 @@
     updateMenuUI();
   }
 
-  function triggerLocalHitFeedback() {
+  function triggerLocalHitFeedback(includeFlash = true) {
     game.shakeTimer = DAMAGE_SHAKE_DURATION;
     game.shakeMagnitude = 5.0;
-    game.damageFlash = 1.0;
+    if (includeFlash) {
+      game.damageFlash = 1.0;
+    }
   }
 
   function triggerCrackScreenShake() {
@@ -1926,7 +2170,18 @@
     game.shakeMagnitude = Math.max(game.shakeMagnitude, 6.5);
   }
 
+  function triggerBombScreenShake() {
+    game.shakeTimer = Math.max(game.shakeTimer, 0.28);
+    game.shakeMagnitude = Math.max(game.shakeMagnitude, 7.5);
+  }
+
   function damagePaddle(targetPaddle, damageAmount) {
+    const hadGuard = Boolean(
+      targetPaddle &&
+      targetPaddle.hp > 0 &&
+      targetPaddle.invincibleTimer <= 0 &&
+      targetPaddle.guardTimer > 0
+    );
     if (targetPaddle && targetPaddle.takeDamage(damageAmount, effectsManager)) {
       if (targetPaddle.hp <= 0) {
         assignRespawnCountdown(targetPaddle);
@@ -1937,6 +2192,14 @@
         mp.sendGameEvent(NetProto.encodeFxEvt('paddle_hit', { slot: targetPaddle.slot }));
       }
       return true;
+    }
+    if (hadGuard && targetPaddle && targetPaddle.guardTimer <= 0) {
+      if (targetPaddle.isLocal) {
+        triggerLocalHitFeedback(false);
+      }
+      if (mp.mode === 'host') {
+        sendHostSnapshot(true);
+      }
     }
     return false;
   }
@@ -2087,7 +2350,8 @@
         p.invincibleTimer || 0,
         p.isLocal ? 0 : (lastProcessedInputSeqBySlot.get(p.slot) || 0),
         p.respawnTimer || 0,
-        p.respawnPenalty || 0
+        p.respawnPenalty || 0,
+        p.guardTimer || 0
       ]),
       pp: game.purplePaddle
         ? [game.purplePaddle.x, game.purplePaddle.width, game.purplePaddle.bounces]
@@ -2229,6 +2493,8 @@
       }, false);
       if (msg.kind === 'crack') {
         triggerCrackScreenShake();
+      } else if (msg.subType === 'bomb') {
+        triggerBombScreenShake();
       }
     } else if (msg.type === 'fx_particles') {
       effectsManager.spawnCircleParticles(
@@ -2247,6 +2513,14 @@
         ? resolvePulseTarget('paddle', msg.slot)
         : null;
       effectsManager.spawnPaddleShatterSection(msg.x, msg.y, msg.w, msg.h, msg.originPaddleX, false, targetPaddle);
+    } else if (msg.type === 'fx_shield_shatter') {
+      const targetPaddle = (msg.slot !== undefined && msg.slot !== null)
+        ? resolvePulseTarget('paddle', msg.slot)
+        : null;
+      effectsManager.spawnShieldShatter(msg.x, msg.y, msg.w, msg.h, msg.originPaddleX, false, targetPaddle);
+      if (msg.slot === mp.assignedSlot) {
+        triggerLocalHitFeedback(false);
+      }
     } else if (msg.type === 'end_game') {
       mp.setInGame(false);
       game.endScreenPlayerNames = Array.isArray(msg.playerNames) && msg.playerNames.length > 0
@@ -2362,6 +2636,7 @@
             timer: 0,
             damage: b.damage || 1,
             shape: b.shape,
+            trail: (b.shape === 'crescent' || b.bounceWalls || b.motionMode === 'arc') ? [{ x: b.x, y: b.y }] : undefined,
             explodeY: b.explodeY,
             explodeCount: b.explodeCount,
             homingMode: b.homingMode,
@@ -2370,10 +2645,25 @@
             decelDuration: b.decelDuration,
             waitTarget: b.waitTarget,
             homingTimer: b.homingTimer || 0,
-            waitAfterStop: b.waitAfterStop || 0
+            waitAfterStop: b.waitAfterStop || 0,
+            motionMode: b.motionMode,
+            bounceWalls: Boolean(b.bounceWalls),
+            arcStartX: b.arcStartX,
+            arcStartY: b.arcStartY,
+            arcTargetX: b.arcTargetX,
+            arcTargetY: b.arcTargetY,
+            arcBend: b.arcBend,
+            arcDur: b.arcDur,
+            arcElapsed: b.arcElapsed || 0,
+            knifeHoldX: b.knifeHoldX,
+            knifeHoldY: b.knifeHoldY,
+            knifeRiseY: b.knifeRiseY,
+            knifeElapsed: b.knifeElapsed || 0,
+            knifeAlpha: b.knifeAlpha !== undefined ? b.knifeAlpha : 0,
+            knifeVisualAngle: b.knifeVisualAngle
           };
           Enemy.stepBulletMotion(bullet, delaySec);
-          if (bullet.y > HEIGHT + 24 || bullet.y < -24 || bullet.x < -24 || bullet.x > WIDTH + 24) continue;
+          if (isBulletOutOfBounds(bullet)) continue;
           if (!Enemy.maybeExplodeSpadeBullet(bullet, game.enemyBullets, effectsManager)) {
             game.enemyBullets.push(bullet);
           }
@@ -2653,7 +2943,7 @@
     const nextPaddles = [];
     const totalCount = Math.max(1, snap.ps.length);
     for (const row of snap.ps) {
-      const [slot, x, hp, maxHp, cw, clk, cyan, yellow, green, nickRaw, contestedCnt, regenTime, invTimer, ackSeq, respawnTimer, respawnPenalty] = row;
+      const [slot, x, hp, maxHp, cw, clk, cyan, yellow, green, nickRaw, contestedCnt, regenTime, invTimer, ackSeq, respawnTimer, respawnPenalty, guardTimer] = row;
       let p = game.paddles.find((item) => item.slot === slot);
       const existed = Boolean(p);
       const nick = nickRaw !== null && nickRaw !== undefined
@@ -2686,6 +2976,17 @@
       if (invTimer !== undefined) p.invincibleTimer = invTimer;
       if (respawnTimer !== undefined) p.respawnTimer = respawnTimer;
       if (respawnPenalty !== undefined) p.respawnPenalty = respawnPenalty;
+      if (guardTimer !== undefined) {
+        const prevGuard = p.guardTimer || 0;
+        if (prevGuard <= 0 && guardTimer > 0) {
+          p.activateGuard(guardTimer);
+        } else {
+          p.guardTimer = guardTimer;
+          if (prevGuard > 0 && prevGuard < 0.35 && guardTimer <= 0 && p.guardScaleOutTimer <= 0) {
+            p.guardScaleOutTimer = 0.25;
+          }
+        }
+      }
       p._deathRespawnHandled = p.hp <= 0;
 
       if (p.isLocal) {
@@ -2744,12 +3045,14 @@
     if (snap.bo) {
       const expectedBossKind = snap.bo[0] === 'snake'
         ? 'snake'
-        : (snap.bo[0] === 'cloud' ? 'cloud' : 'bigfoot');
+        : (snap.bo[0] === 'cloud' ? 'cloud' : (snap.bo[0] === 'dragon' ? 'dragon' : 'bigfoot'));
       if (!game.boss || game.boss.id !== expectedBossKind) {
         const stageData = MAPS[snap.si % MAPS.length];
         game.boss = expectedBossKind === 'snake'
           ? new SnakeBoss(stageData)
-          : (expectedBossKind === 'cloud' ? new CloudBoss(stageData) : new BigfootBoss(stageData));
+          : (expectedBossKind === 'cloud'
+            ? new CloudBoss(stageData)
+            : (expectedBossKind === 'dragon' ? new DragonBoss(stageData) : new BigfootBoss(stageData)));
       }
       game.boss.applySnapshot(snap.bo, Math.max(0.035, guestSnapIntervalEstimate));
     } else {
@@ -2790,10 +3093,11 @@
         game.remoteTransitionSnap[0] === 'killing_enemies' ||
         game.remoteTransitionSnap[0] === 'waiting_before_blocks'
       ));
+      const allDead = isAllPaddlesDead();
       let localPaddle = null;
       for (const p of game.paddles) {
         if (p.hp <= 0) {
-          if (!isStageClearWarping && p.respawnTimer > 0) {
+          if (!allDead && !isStageClearWarping && p.respawnTimer > 0) {
             p.respawnTimer = Math.max(0, p.respawnTimer - dt);
           }
           continue;
@@ -2801,6 +3105,7 @@
         if (p.invincibleTimer > 0) {
           p.invincibleTimer = Math.max(0, p.invincibleTimer - dt);
         }
+        p.stepGuardTimers(dt, effectsManager);
         if (p.effects.cyan > 0 || p.effects.yellow > 0 || p.effects.green > 0) {
           p.effectClock += dt;
           p.effects.cyan = Math.max(0, p.effects.cyan - dt);
@@ -2877,7 +3182,14 @@
 
       // エネミー移動＆確定的エネミー（single / spread）のローカル自動発射再現
       for (let i = game.enemies.length - 1; i >= 0; i--) {
-        if (!game.enemies[i].updateClient(dt, game.enemyBullets, game.paddles)) {
+        const en = game.enemies[i];
+        en.hiddenByCloud = Boolean(
+          game.boss &&
+          !game.boss.isDefeated() &&
+          typeof game.boss.isEnemyHidden === 'function' &&
+          game.boss.isEnemyHidden(en)
+        );
+        if (!en.updateClient(dt, game.enemyBullets, game.paddles)) {
           game.enemies.splice(i, 1);
         }
       }
@@ -2918,15 +3230,18 @@
         if (game.boss.phase === 'summon') {
           game.shakeTimer = Math.max(game.shakeTimer, 0.08);
           game.shakeMagnitude = Math.max(game.shakeMagnitude, 4.2);
-        } else if (game.boss.phase === 'fog_cast') {
+        } else if (game.boss.phase === 'box_drop') {
           game.shakeTimer = Math.max(game.shakeTimer, 0.08);
-          game.shakeMagnitude = Math.max(game.shakeMagnitude, 3.2);
+          game.shakeMagnitude = Math.max(game.shakeMagnitude, 3.8);
         } else if (game.boss.id === 'cloud') {
           if (game.boss.phase === 'lightning_strike' && game.boss._lastGuestPhase !== 'lightning_strike') {
             game.shakeTimer = Math.max(game.shakeTimer, 0.14);
             game.shakeMagnitude = Math.max(game.shakeMagnitude, 6.5);
           }
           game.boss._lastGuestPhase = game.boss.phase;
+        } else if (game.boss.id === 'dragon' && game.boss.isFlyingWithWings && game.boss.isFlyingWithWings()) {
+          game.shakeTimer = Math.max(game.shakeTimer, 0.1);
+          game.shakeMagnitude = Math.max(game.shakeMagnitude, game.boss.phase === 'fly_arc_up' ? 5.0 : 4.0);
         }
       }
 
@@ -3018,13 +3333,14 @@
     ));
     const playerCount = Math.max(1, game.paddles.length);
     const currentMaxHp = MultiplayerManager.getMaxHpForCount(playerCount);
+    const allDead = isAllPaddlesDead();
     for (const p of game.paddles) {
       if (p.hp <= 0) {
         if (mp.mode !== 'solo') {
           if (!p._deathRespawnHandled) {
             assignRespawnCountdown(p);
           }
-          if (!isStageClearWarping && p.respawnTimer > 0) {
+          if (!allDead && !isStageClearWarping && p.respawnTimer > 0) {
             p.respawnTimer = Math.max(0, p.respawnTimer - dt);
             if (p.respawnTimer <= 0) {
               p.revive(currentMaxHp, effectsManager, playerCount);
@@ -3041,6 +3357,7 @@
       const pInput = p.isLocal
         ? input
         : (isFresh ? ri : { left: false, right: false, pointerX: null });
+      const prevX = p.x;
       p.update(dt, pInput, effectsManager);
       if (!p.isLocal && ri && typeof ri.x === 'number' && Number.isFinite(ri.x)) {
         const halfW = p.currentWidth / 2;
@@ -3052,6 +3369,7 @@
           halfW,
           WIDTH - halfW
         );
+        p.vx = dt > 0 ? (p.x - prevX) / dt : 0;
       }
     }
 
@@ -3069,84 +3387,57 @@
       }
     }
 
-    const emitNewEnemies = () => {
-      if (mp.mode !== 'host') return;
-      for (const en of game.enemies) {
-        if (!en._netSpawnSent) {
-          en._netSpawnSent = true;
+    emitSpawnedEnemies();
+
+    const enemyNetHooks = {
+      onBombExplode: () => triggerBombScreenShake(),
+      ...(mp.mode === 'host' ? {
+        onFirstDeterministicShot: (en) => {
           mp.sendGameEvent(NetProto.encodeEnemyEvt({
-            op: 0,
+            op: 1,
             serverTimeMs: mp.getServerTimeMs(),
-            id: en.id,
-            name: en.name,
+            enemyId: en.id,
+            shotSeq: en._shotSeq,
+            x: en.x,
+            y: en.y,
+            rotation: en.rotation,
+            vx: en.vx,
+            vy: en.vy
+          }));
+        },
+        onBulletsSpawned: emitSpawnedEnemyBullets,
+        onEnemyStateSync: (en, subOp) => {
+          if (!en) return;
+          const phaseCode = en.aimedFallPhase === 'charging' ? 1 : (en.aimedFallPhase === 'diving' ? 2 : 0);
+          const timer = subOp === 1
+            ? en.fireTimer
+            : (en.aimedFallPhase === 'charging' ? en.aimedFallTimer : en.fireTimer);
+          mp.sendGameEvent(NetProto.encodeEnemyEvt({
+            op: 5,
+            serverTimeMs: mp.getServerTimeMs(),
+            enemyId: en.id,
+            subOp,
             x: en.x,
             y: en.y,
             vx: en.vx,
             vy: en.vy,
-            rotation: en.rotation,
-            health: en.health,
-            maxHealth: en.maxHealth,
-            currentRadius: en.currentRadius,
-            bullet_type: en.bullet_type,
-            fire_rate: en.fire_rate,
-            localAutoFire: false,
-            fireTimer: en.fireTimer || 0
+            angle: en.laserAngle || 0,
+            timer,
+            phaseCode,
+            targetSlot: en.aimedFallTargetSlot
           }));
         }
-      }
+      } : {})
     };
-    emitNewEnemies();
-
-    const enemyNetHooks = mp.mode === 'host' ? {
-      onFirstDeterministicShot: (en) => {
-        mp.sendGameEvent(NetProto.encodeEnemyEvt({
-          op: 1,
-          serverTimeMs: mp.getServerTimeMs(),
-          enemyId: en.id,
-          shotSeq: en._shotSeq,
-          x: en.x,
-          y: en.y,
-          rotation: en.rotation,
-          vx: en.vx,
-          vy: en.vy
-        }));
-      },
-      onBulletsSpawned: (spawned) => {
-        if (!spawned || spawned.length === 0) return;
-        for (const b of spawned) {
-          if (b.id === undefined) b.id = getNextBulletId();
-        }
-        mp.sendGameEvent(NetProto.encodeBulletEvt({
-          op: 0,
-          serverTimeMs: mp.getServerTimeMs(),
-          bullets: spawned
-        }));
-      },
-      onEnemyStateSync: (en, subOp) => {
-        if (!en) return;
-        const phaseCode = en.aimedFallPhase === 'charging' ? 1 : (en.aimedFallPhase === 'diving' ? 2 : 0);
-        const timer = subOp === 1
-          ? en.fireTimer
-          : (en.aimedFallPhase === 'charging' ? en.aimedFallTimer : en.fireTimer);
-        mp.sendGameEvent(NetProto.encodeEnemyEvt({
-          op: 5,
-          serverTimeMs: mp.getServerTimeMs(),
-          enemyId: en.id,
-          subOp,
-          x: en.x,
-          y: en.y,
-          vx: en.vx,
-          vy: en.vy,
-          angle: en.laserAngle || 0,
-          timer,
-          phaseCode,
-          targetSlot: en.aimedFallTargetSlot
-        }));
-      }
-    } : null;
 
     for (let i = game.enemies.length - 1; i >= 0; i--) {
       const en = game.enemies[i];
+      en.hiddenByCloud = Boolean(
+        game.boss &&
+        !game.boss.isDefeated() &&
+        typeof game.boss.isEnemyHidden === 'function' &&
+        game.boss.isEnemyHidden(en)
+      );
       const alive = en.update(dt, game.paddles, game.enemyBullets, effectsManager, damagePaddle, enemyNetHooks);
       if (!alive) {
         game.enemies.splice(i, 1);
@@ -3155,7 +3446,7 @@
             op: 3,
             serverTimeMs: mp.getServerTimeMs(),
             enemyId: en.id,
-            reason: (en.bullet_type === 'self_destruction' || en.bullet_type === 'connect') ? 2 : 1
+            reason: (en.bullet_type === 'self_destruction' || en.bullet_type === 'self_explosion' || en.bullet_type === 'connect') ? 2 : 1
           }));
         }
       }
@@ -3200,25 +3491,20 @@
         paddles: game.paddles,
         enemies: game.enemies,
         enemyBullets: game.enemyBullets,
+        items: game.items,
         effectsManager,
         onDamagePaddle: damagePaddle,
         onScreenShake: (dur, mag) => {
           game.shakeTimer = Math.max(game.shakeTimer, dur);
           game.shakeMagnitude = Math.max(game.shakeMagnitude, mag);
         },
-        onBarrageSpawn: (spawned) => {
-          if (mp.mode !== 'host' || !spawned || spawned.length === 0) return;
-          for (const b of spawned) {
-            if (b.id === undefined) b.id = getNextBulletId();
-          }
-          mp.sendGameEvent(NetProto.encodeBulletEvt({
-            op: 0,
-            serverTimeMs: mp.getServerTimeMs(),
-            bullets: spawned
-          }));
-        }
+        onBarrageSpawn: emitSpawnedEnemyBullets,
+        onSpawnItem: (x, y) => {
+          maybeSpawnItem(x, y, 1.0);
+        },
+        inTransition: Boolean(game.transition)
       });
-      emitNewEnemies();
+      emitSpawnedEnemies();
 
       if (!game.transition && isBossStage(stageData) && !game.boss.isDefeated()) {
         game.bossSupplyTimer -= dt;
@@ -3308,16 +3594,28 @@
       }
 
       let hitAny = false;
-      for (const p of game.paddles) {
-        if (!p || p.hp <= 0 || p.invincibleTimer > 0) continue;
-        const pLeft = p.x - p.currentWidth / 2;
-        const pRight = p.x + p.currentWidth / 2;
-        const pTop = p.y - p.height / 2;
-        const pBottom = p.y + p.height / 2;
+      const isKnifePreLaunch = b.shape === 'knife' && b.motionMode === 'knife' && (b.knifeElapsed || 0) < 1.0;
+      if (!isKnifePreLaunch) {
+        for (const p of game.paddles) {
+          if (!p || p.hp <= 0 || p.invincibleTimer > 0) continue;
+          const pLeft = p.x - p.currentWidth / 2;
+          const pRight = p.x + p.currentWidth / 2;
+          const pTop = p.y - p.height / 2;
+          const pBottom = p.y + p.height / 2;
 
-        if (b.x >= pLeft && b.x <= pRight && b.y >= pTop && b.y <= pBottom) {
-          damagePaddle(p, b.damage);
-          hitAny = true;
+          let bulletHitsPaddle = false;
+          if (b.shape === 'crescent' || b.shape === 'knife') {
+            const nx = ColorUtils.clamp(b.x, pLeft, pRight);
+            const ny = ColorUtils.clamp(b.y, pTop, pBottom);
+            bulletHitsPaddle = Math.hypot(b.x - nx, b.y - ny) <= (b.shape === 'knife' ? 6 : 9);
+          } else {
+            bulletHitsPaddle = b.x >= pLeft && b.x <= pRight && b.y >= pTop && b.y <= pBottom;
+          }
+
+          if (bulletHitsPaddle) {
+            damagePaddle(p, b.damage);
+            hitAny = true;
+          }
         }
       }
       if (hitAny) {
@@ -3332,7 +3630,7 @@
         continue;
       }
 
-      if (b.y > HEIGHT + 24 || b.y < -24 || b.x < -24 || b.x > WIDTH + 24) {
+      if (isBulletOutOfBounds(b)) {
         game.enemyBullets.splice(i, 1);
       }
     }
@@ -3367,14 +3665,19 @@
       blocks: game.blocks,
       supplyDrops: game.supplyDrops,
       enemies: game.enemies,
+      enemyBullets: game.enemyBullets,
       boss: game.boss,
       effectsManager,
+      onDamagePaddle: damagePaddle,
+      enemyNetHooks,
       swingActive: isSkillActive('swing'),
       onScore: (pts) => {
         game.score += pts;
       },
       enemyDropChance: Item.getEnemyDropChance(stageData),
       onSpawnItem: maybeSpawnItem,
+      onBulletsSpawned: emitSpawnedEnemyBullets,
+      onEnemiesSpawned: emitSpawnedEnemies,
       onClearPurplePaddle: () => {
         game.purplePaddle = null;
       },
@@ -3435,7 +3738,7 @@
     if (game.balls.length === 0) {
       if (game.lives > 0) {
         game.lives -= 1;
-        const allDead = game.paddles.every((p) => p.hp <= 0);
+        const allDead = isAllPaddlesDead();
         if (allDead) {
           resetRespawnPenalties();
           reviveDeadPaddles();
@@ -3598,8 +3901,9 @@
         (game.transition && (game.transition.phase === 'killing_enemies' || game.transition.phase === 'waiting_before_blocks')) ||
         (mp.mode === 'guest' && game.remoteTransitionSnap && (game.remoteTransitionSnap[0] === 'killing_enemies' || game.remoteTransitionSnap[0] === 'waiting_before_blocks'))
       );
+      const allDead = isAllPaddlesDead();
       const localPaddle = game.paddles.find((p) => p && p.isLocal);
-      if (!isStageClearWarping && localPaddle && localPaddle.hp <= 0 && localPaddle.respawnTimer > 0) {
+      if (!allDead && !isStageClearWarping && localPaddle && localPaddle.hp <= 0 && localPaddle.respawnTimer > 0) {
         const remainSec = Math.max(1, Math.ceil(localPaddle.respawnTimer));
         ctx.save();
         ctx.globalAlpha = 0.35;
@@ -3676,7 +3980,48 @@
       if (b.shape === 'spade') {
         const bAngle = b.angle !== undefined ? b.angle : Math.atan2(b.vy || 0, b.vx || 0);
         ShapeRenderer.drawEnemyShape(ctx, 'spade', b.x, b.y, 11, bAngle - Math.PI / 2, strokeColor, 1, true);
+      } else if (b.shape === 'crescent' || b.shape === 'knife') {
+        const bAngle = b.angle !== undefined ? b.angle : Math.atan2(b.vy || 0, b.vx || 0);
+        const drawAngle = (b.shape === 'knife' && b.knifeVisualAngle !== undefined) ? b.knifeVisualAngle : bAngle;
+        const headAlpha = (b.shape === 'knife' && b.knifeAlpha !== undefined) ? b.knifeAlpha : 1;
+        const baseRadius = b.shape === 'knife' ? 15 : 14;
+        if (Array.isArray(b.trail) && b.trail.length > 0) {
+          const steps = b.trail.length;
+          for (let k = 0; k < steps; k++) {
+            const frac = 1 - (k + 1) / (steps + 1);
+            const tAlpha = Math.pow(1 - frac, 2.0) * 0.52 * headAlpha;
+            const pt = b.trail[k];
+            ShapeRenderer.drawEnemyShape(
+              ctx,
+              b.shape,
+              pt.x,
+              pt.y,
+              (baseRadius - 1) * (0.72 + 0.28 * (1 - frac)),
+              drawAngle,
+              strokeColor,
+              tAlpha,
+              false
+            );
+          }
+        }
+        ShapeRenderer.drawEnemyShape(ctx, b.shape, b.x, b.y, baseRadius, drawAngle, strokeColor, headAlpha, true);
       } else {
+        if (Array.isArray(b.trail) && b.trail.length > 0) {
+          const steps = b.trail.length;
+          for (let k = 0; k < steps; k++) {
+            const frac = 1 - (k + 1) / (steps + 1);
+            const tAlpha = Math.pow(1 - frac, 2.0) * 0.52;
+            const pt = b.trail[k];
+            const tr = ENEMY.BULLET_VISUAL_RADIUS * (0.58 + 0.36 * (1 - frac));
+            ctx.save();
+            ctx.globalAlpha = tAlpha;
+            ctx.strokeStyle = strokeColor;
+            ctx.beginPath();
+            ctx.arc(pt.x, pt.y, tr, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+          }
+        }
         ctx.fillStyle = '#000000';
         ctx.strokeStyle = strokeColor;
         ctx.beginPath();
@@ -3880,21 +4225,6 @@
     ctx.save();
     ctx.fillStyle = 'rgba(0, 0, 0, 0.76)';
     ctx.fillRect(0, 0, WIDTH, HEIGHT);
-
-    for (let i = 0; i < MAPS.length; i++) {
-      const sx = WIDTH / 2 + (i - (MAPS.length - 1) / 2) * 34;
-      const sy = 250;
-      const cleared = game.state === 'victory' || i < game.stageIndex;
-      ShapeRenderer.drawPolygonPath(ctx, sx, sy, 9, 4, 0);
-      if (cleared) {
-        ctx.fillStyle = COLORS.white;
-        ctx.fill();
-      } else {
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-      }
-    }
 
     ctx.fillStyle = COLORS.white;
     ctx.font = '700 68px "Google Sans Flex", sans-serif';

@@ -6,10 +6,25 @@
   -webkit-user-select: none;
 }
 
+:root {
+  --app-w: 100vw;
+  --app-h: 100vh;
+}
+
+@supports (height: 100dvh) {
+  :root {
+    --app-w: 100dvw;
+    --app-h: 100dvh;
+  }
+}
+
 html,
 body {
   width: 100%;
   height: 100%;
+  height: var(--app-h);
+  max-height: var(--app-h);
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
   background-color: #000000;
   color: #ffffff;
   font-family: 'Google Sans Flex', sans-serif;
@@ -22,8 +37,10 @@ body {
 
 #game-wrapper {
   position: relative;
-  width: min(100vw, calc(100vh * (780 / 900)));
-  height: min(100vh, calc(100vw * (900 / 780)));
+  width: min(calc(var(--app-w) - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)), calc((var(--app-h) - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)) * (780 / 900)));
+  height: min(calc(var(--app-h) - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)), calc((var(--app-w) - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)) * (900 / 780)));
+  max-width: 100%;
+  max-height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -48,7 +65,7 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: clamp(8px, 1.8vh, 16px);
+  gap: clamp(6px, calc(var(--app-h) * 0.018), 16px);
   width: min(520px, 88%);
   z-index: 10;
   pointer-events: none;
@@ -57,8 +74,8 @@ body {
 #play-button {
   background: transparent;
   border: none;
-  width: clamp(64px, 13.5vh, 118px);
-  height: clamp(64px, 13.5vh, 118px);
+  width: clamp(44px, calc(var(--app-h) * 0.135), 118px);
+  height: clamp(44px, calc(var(--app-h) * 0.135), 118px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -240,13 +257,13 @@ body {
 
 #room-controls {
   position: absolute;
-  top: 94.5%;
+  bottom: 1.6%;
   left: 50%;
-  transform: translate(-50%, -50%);
+  transform: translateX(-50%);
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 5px;
+  gap: clamp(2px, calc(var(--app-h) * 0.006), 5px);
   transition: opacity 0.25s ease, transform 0.22s ease;
   z-index: 10;
 }
@@ -254,12 +271,12 @@ body {
 #room-controls.hidden {
   opacity: 0;
   pointer-events: none;
-  transform: translate(-50%, -50%) scale(0.9);
+  transform: translateX(-50%) scale(0.9);
 }
 
 #copy-link-button {
-  width: 38px;
-  height: 38px;
+  width: clamp(24px, calc(var(--app-h) * 0.044), 38px);
+  height: clamp(24px, calc(var(--app-h) * 0.044), 38px);
   border-radius: 50%;
   border: none;
   background: transparent;
@@ -270,6 +287,11 @@ body {
   cursor: pointer;
   outline: none;
   transition: transform 0.18s ease, color 0.2s ease;
+}
+
+#copy-link-button svg {
+  width: clamp(16px, calc(var(--app-h) * 0.025), 22px);
+  height: clamp(16px, calc(var(--app-h) * 0.025), 22px);
 }
 
 #copy-link-button:hover:not(.disabled):not(:disabled) {
@@ -291,8 +313,17 @@ body {
   display: none;
 }
 
+#copy-link-button .icon-copy,
 #copy-link-button .icon-check {
   display: none;
+}
+
+#copy-link-button.in-room .icon-link {
+  display: none;
+}
+
+#copy-link-button.in-room .icon-copy {
+  display: block;
 }
 
 #copy-link-button.copied {
@@ -300,7 +331,8 @@ body {
   background: transparent;
 }
 
-#copy-link-button.copied .icon-link {
+#copy-link-button.copied .icon-link,
+#copy-link-button.copied .icon-copy {
   display: none;
 }
 
@@ -308,9 +340,94 @@ body {
   display: block;
 }
 
+#room-join-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: clamp(24px, calc(var(--app-h) * 0.044), 38px);
+  margin-top: 0;
+  margin-bottom: calc(14px + clamp(2px, calc(var(--app-h) * 0.006), 5px));
+}
+
+#room-join-row.hidden {
+  display: none;
+}
+
+#room-code-input {
+  width: clamp(72px, calc(var(--app-h) * 0.115), 94px);
+  background: transparent;
+  border: none;
+  border-bottom: 1.5px solid rgba(255, 255, 255, 0.36);
+  color: #ffffff;
+  font-family: 'Google Sans Flex', sans-serif;
+  font-size: clamp(11px, calc(var(--app-h) * 0.017), 13px);
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: 2.2px;
+  text-align: center;
+  text-transform: uppercase;
+  padding: 0 4px 1px;
+  outline: none;
+  user-select: text;
+  -webkit-user-select: text;
+  touch-action: manipulation;
+  transition: border-color 0.2s ease;
+}
+
+#room-code-input::placeholder {
+  color: rgba(255, 255, 255, 0.28);
+  letter-spacing: 2.4px;
+}
+
+#room-code-input:focus {
+  border-bottom-color: #ffffff;
+}
+
+#room-action-button {
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: transparent;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  outline: none;
+  transition: opacity 0.18s ease, transform 0.16s ease, color 0.18s ease;
+}
+
+#room-action-button .icon-arrow {
+  display: none;
+}
+
+#room-action-button.is-arrow .icon-plus {
+  display: none;
+}
+
+#room-action-button.is-arrow .icon-arrow {
+  display: block;
+}
+
+#room-action-button.is-arrow.incomplete {
+  opacity: 0.36;
+  color: rgba(255, 255, 255, 0.72);
+  cursor: default;
+}
+
+#room-action-button:hover:not(:disabled):not(.incomplete) {
+  transform: scale(1.1);
+}
+
+#room-action-button:active:not(:disabled):not(.incomplete) {
+  transform: scale(0.92);
+}
+
 #room-status {
   color: rgba(255, 255, 255, 0.48);
-  font-size: 11px;
+  font-size: clamp(10px, calc(var(--app-h) * 0.014), 11px);
   font-weight: 500;
   letter-spacing: 1.6px;
   min-height: 14px;
@@ -318,15 +435,19 @@ body {
   pointer-events: none;
 }
 
+#room-status.hidden {
+  display: none;
+}
+
 #skill-bar {
   position: absolute;
   left: calc(100% + 16px);
-  bottom: 20px;
+  bottom: clamp(8px, calc(var(--app-h) * 0.022), 20px);
   right: auto;
   transform: none;
   display: flex;
   flex-direction: column-reverse;
-  gap: 10px;
+  gap: clamp(6px, calc(var(--app-h) * 0.012), 10px);
   z-index: 12;
   transition: opacity 0.2s ease;
 }
@@ -349,8 +470,8 @@ body {
 
 .skill-btn {
   position: relative;
-  width: 64px;
-  height: 64px;
+  width: clamp(40px, calc(var(--app-h) * 0.14), 64px);
+  height: clamp(40px, calc(var(--app-h) * 0.14), 64px);
   border: none;
   background: rgba(255, 255, 255, 0.14);
   color: #ffffff;
@@ -432,8 +553,8 @@ body {
 .skill-btn-icon {
   position: relative;
   z-index: 1;
-  width: 34px;
-  height: 34px;
+  width: 54%;
+  height: 54%;
   pointer-events: none;
   transition: opacity 0.2s ease;
 }

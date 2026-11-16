@@ -29,6 +29,7 @@ class EffectManager {
       target: shapeData.target || null,
       x: shapeData.x,
       y: shapeData.y,
+      offsetY: shapeData.offsetY || 0,
       w: shapeData.w || 0,
       h: shapeData.h || 0,
       radius: shapeData.radius || 0,
@@ -147,6 +148,34 @@ class EffectManager {
     }
   }
 
+  spawnShieldShatter(xCenter, yCenter, width, height, originPaddleX, emit = true, targetPaddle = null) {
+    if (width <= 0 || height <= 0) return;
+    const target = targetPaddle && targetPaddle.hp > 0 ? targetPaddle : null;
+    this.damageTrails.push({
+      kind: 'shield',
+      x: xCenter,
+      y: yCenter,
+      w: width,
+      h: height,
+      originPaddleX,
+      target,
+      offsetX: target ? xCenter - target.x : xCenter - originPaddleX,
+      offsetY: target ? yCenter - target.y : 0,
+      timer: 0,
+      holdDuration: 0.22
+    });
+    if (emit && this.onEvent) {
+      this.emitEvent('fx_shield_shatter', {
+        x: Math.round(xCenter * 10) / 10,
+        y: Math.round(yCenter * 10) / 10,
+        w: Math.round(width * 10) / 10,
+        h: Math.round(height * 10) / 10,
+        originPaddleX: Math.round(originPaddleX * 10) / 10,
+        slot: target && target.slot !== undefined ? target.slot : null
+      });
+    }
+  }
+
   syncDamageTrailPosition(trail) {
     if (trail.target && trail.target.hp > 0) {
       trail.x = trail.target.x + trail.offsetX;
@@ -156,6 +185,44 @@ class EffectManager {
   }
 
   shatterTrailIntoTriangles(trail) {
+    if (trail.kind === 'shield') {
+      const hw = trail.w * 0.5;
+      const hh = trail.h * 0.5;
+      const ring = [
+        { x: trail.x, y: trail.y - hh },
+        { x: trail.x + hw, y: trail.y - hh * 0.5 },
+        { x: trail.x + hw * 0.85, y: trail.y + hh * 0.35 },
+        { x: trail.x, y: trail.y + hh },
+        { x: trail.x - hw * 0.85, y: trail.y + hh * 0.35 },
+        { x: trail.x - hw, y: trail.y - hh * 0.5 }
+      ];
+      for (let i = 0; i < ring.length; i++) {
+        const p1 = ring[i];
+        const p2 = ring[(i + 1) % ring.length];
+        const p0 = { x: trail.x, y: trail.y };
+        const cx = (p0.x + p1.x + p2.x) / 3;
+        const cy = (p0.y + p1.y + p2.y) / 3;
+        const localPts = [p0, p1, p2].map((p) => ({ x: p.x - cx, y: p.y - cy }));
+        const spreadAngle = Math.atan2(cy - trail.y, cx - trail.x) + (Math.random() - 0.5) * 0.7;
+        const speed = 35 + Math.random() * 80;
+        this.shatterTriangles.push({
+          x: cx,
+          y: cy,
+          pts: localPts,
+          vx: Math.cos(spreadAngle) * speed,
+          vy: Math.sin(spreadAngle) * speed,
+          rot: 0,
+          vRot: (Math.random() - 0.5) * 8,
+          scale: 1,
+          alpha: 1,
+          color: GAME_CONFIG.COLORS.red,
+          timer: 0,
+          duration: 0.6 + Math.random() * 0.25
+        });
+      }
+      return;
+    }
+
     const cols = Math.max(2, Math.ceil(trail.w / 9));
     const cellW = trail.w / cols;
     const startX = trail.x - trail.w / 2;
@@ -257,7 +324,7 @@ class EffectManager {
 
       // 追従対象(target)がある場合は、現在の座標・角度をリアルタイムに参照して置いていかれないようにする
       const px = pls.target ? (pls.target.x + (pls.target.corrX || 0)) : pls.x;
-      const py = pls.target ? (pls.target.y + (pls.target.corrY || 0)) : pls.y;
+      const py = (pls.target ? (pls.target.y + (pls.target.corrY || 0)) : pls.y) + (pls.offsetY || 0);
       const pAngle = pls.target
         ? (pls.target.angle !== undefined ? pls.target.angle : (pls.target.rotation !== undefined ? pls.target.rotation : pls.angle))
         : pls.angle;
@@ -366,6 +433,16 @@ class EffectManager {
         ctx.closePath();
         ctx.fill();
         ctx.restore();
+      } else if (pls.kind === 'shield') {
+        ShapeRenderer.drawShieldIcon(
+          ctx,
+          px,
+          py,
+          (pls.w || 13) * scale,
+          (pls.h || 15) * scale,
+          pls.color || GAME_CONFIG.COLORS.white,
+          alpha * 0.85
+        );
       }
     }
   }
@@ -374,9 +451,13 @@ class EffectManager {
     ctx.save();
     for (const tr of this.damageTrails) {
       this.syncDamageTrailPosition(tr);
-      ctx.fillStyle = GAME_CONFIG.COLORS.red;
-      ctx.globalAlpha = 0.88;
-      ctx.fillRect(tr.x - tr.w / 2, tr.y - tr.h / 2, tr.w, tr.h);
+      if (tr.kind === 'shield') {
+        ShapeRenderer.drawShieldIcon(ctx, tr.x, tr.y, tr.w, tr.h, GAME_CONFIG.COLORS.red, 0.88);
+      } else {
+        ctx.fillStyle = GAME_CONFIG.COLORS.red;
+        ctx.globalAlpha = 0.88;
+        ctx.fillRect(tr.x - tr.w / 2, tr.y - tr.h / 2, tr.w, tr.h);
+      }
     }
     ctx.restore();
 

@@ -396,12 +396,146 @@ const MAPS = [
     spawn_interval: 7.5,
     spawn_limit: 7
   },
-  // {
-  //   identifier: 30,
-  //   name: 'cloud',
-  //   map: 'boss',
-  //   enemies: ['arrow', 'wide_arrow', 'sparkle', 'scissors'],
-  //   spawn_interval: null,
-  //   spawn_limit: 7
-  // }
+  {
+    identifier: 30,
+    name: 'cloud',
+    map: 'boss',
+    enemies: ['arrow', 'wide_arrow', 'sparkle', 'scissors', 'square'],
+    spawn_interval: null,
+    spawn_limit: 7
+  },
+  {
+    identifier: 31,
+    name: 'trophy',
+    map: [
+      '###  ###  ###',
+      ' ###  #  ### ',
+      ' ###  #  ### ',
+      ' ###  #  ### ',
+      '  ### # ###  '
+    ],
+    enemies: ['sparkle', 'arrow', 'wide_arrow', 'scissors'],
+    spawn_interval: 10,
+    spawn_limit: 10
+  },
+  {
+    identifier: 32,
+    name: 'download',
+    map: [
+      '   #######   ',
+      '#   #####   #',
+      '#    ###    #',
+      '#           #',
+      '#############'
+    ],
+    enemies: ['prism', 'arrow'],
+    spawn_interval: 10,
+    spawn_limit: 10
+  },
+  {
+    identifier: 33,
+    name: 'folder',
+    map: [
+      ' #####       ',
+      ' ######      ',
+      ' ########### ',
+      ' ########### ',
+      ' ########### '
+    ],
+    enemies: ['sparkle', 'circle'],
+    spawn_interval: 10,
+    spawn_limit: 10
+  },
+  {
+    identifier: 34,
+    name: 'gun',
+    map: [
+      '#############',
+      '#############',
+      '     #  #### ',
+      '      ###### ',
+      '         ####'
+    ],
+    enemies: ['wide_arrow', 'crescent'],
+    spawn_interval: 10,
+    spawn_limit: 10
+  },
+  {
+    identifier: 35,
+    name: 'puzzle',
+    map: [
+      '#############',
+      '             ',
+      '  # # #   # #',
+      '#   #   #   #',
+      '# #   # # #  '
+    ],
+    enemies: ['scissors', 'bomb'],
+    spawn_interval: 10,
+    spawn_limit: 10
+  },
+  {
+    identifier: 36,
+    name: 'focus',
+    map: [
+      '   ##   ##   ',
+      '#   #   #   #',
+      '##  ## ##  ##',
+      '##  ## ##  ##',
+      '###  # #  ###'
+    ],
+    enemies: ['arrow', 'prism', 'circle', 'wide_arrow'],
+    spawn_interval: 7.5,
+    spawn_limit: 10
+  },
+  {
+    identifier: 37,
+    name: 'flowers',
+    map: [
+      '       #     ',
+      ' #   ## #  # ',
+      '# # # ##  # #',
+      ' #   # #   # ',
+      ' # # # # # # '
+    ],
+    enemies: ['sparkle', 'circle', 'spade', 'crescent'],
+    spawn_interval: 7.5,
+    spawn_limit: 10
+  },
+  {
+    identifier: 38,
+    name: 'measure',
+    map: [
+      '#           #',
+      '# # # # # # #',
+      '#############',
+      '# # # # # # #',
+      '#           #'
+    ],
+    enemies: ['crescent', 'bomb', 'quadiamond', 'hexagon'],
+    spawn_interval: 7.5,
+    spawn_limit: 10
+  },
+  {
+    identifier: 39,
+    name: 'zigzag',
+    map: [
+      '### ### ### #',
+      '# # # # # # #',
+      '# # # # # # #',
+      '# # # # # # #',
+      '# ### ### ###'
+    ],
+    enemies: ['bomb', 'crescent', 'circle', 'prism', 'pentagon', 'sparkle'],
+    spawn_interval: 7.5,
+    spawn_limit: 10
+  },
+  {
+    identifier: 40,
+    name: 'dragon',
+    map: 'boss',
+    enemies: ['prism', 'crescent', 'circle', 'bomb'],
+    spawn_interval: null,
+    spawn_limit: 10
+  }
 ];

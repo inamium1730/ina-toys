@@ -23,10 +23,12 @@ class Enemy {
     this.vx = customVx !== undefined ? customVx : (Math.random() < 0.5 ? -1 : 1) * 75;
     this.speedMultiplier = typeof def.speed === 'number' ? def.speed : 1;
     this.vy = 20 * this.speedMultiplier; // すべての敵が非常に緩やかな速度で徐々に下へ移動
+    this.gravity = typeof def.gravity === 'number' ? def.gravity : 0;
+    this.hiddenByCloud = false;
     this.baseRadius = baseRadius;
     this.currentRadius = baseRadius;
     this.targetRadius = baseRadius;
-    this.rotation = 0;
+    this.rotation = def.name === 'crescent' ? Math.PI / 2 : 0;
     this.timeAlive = 0;
     this.hitCooldown = 0;
     this.fireTimer = this.movement_type === 'aimed_fall'
@@ -38,6 +40,9 @@ class Enemy {
     this.hoverY = 160 + Math.random() * 140;
     this._hasFiredOnce = false;
     this._shotSeq = 0;
+    this._counterUseAimed = false;
+    this._pendingSpawnedBullets = [];
+    this._pendingSplitEnemies = [];
     this.localAutoFire = false;
     this.corrX = 0;
     this.corrY = 0;
@@ -75,6 +80,7 @@ class Enemy {
 
   isLaserTelegraphing() {
     return (
+      !this.hiddenByCloud &&
       this.isLaserShooter() &&
       this.laserActiveTimer <= 0 &&
       this.fireTimer > 0 &&
@@ -266,8 +272,116 @@ class Enemy {
       return;
     }
 
+    if (b.motionMode === 'knife') {
+      const riseDur = 0.5;
+      const waitDur = 0.5;
+      const launchAt = riseDur + waitDur;
+      const prevT = b.knifeElapsed || 0;
+      const t = prevT + dt;
+      b.knifeElapsed = t;
+
+      const holdX = b.knifeHoldX !== undefined ? b.knifeHoldX : b.x;
+      const holdY = b.knifeHoldY !== undefined ? b.knifeHoldY : b.y;
+      const riseOffset = b.knifeRiseY !== undefined ? b.knifeRiseY : 52;
+      const targetAng = b.angle !== undefined ? b.angle : Math.PI / 2;
+
+      if (t < riseDur) {
+        const u = t / riseDur;
+        const ease = 1 - Math.pow(1 - u, 3);
+        b.x = holdX;
+        b.y = holdY + riseOffset * (1 - ease);
+        b.knifeAlpha = ColorUtils.clamp(t / 0.28, 0, 1);
+        b.knifeVisualAngle = targetAng - Math.PI * 2 * (1 - ease);
+        b.vx = 0;
+        b.vy = 0;
+      } else if (t < launchAt) {
+        b.x = holdX;
+        b.y = holdY;
+        b.knifeAlpha = 1;
+        b.knifeVisualAngle = targetAng;
+        b.vx = 0;
+        b.vy = 0;
+      } else {
+        b.knifeAlpha = 1;
+        b.knifeVisualAngle = targetAng;
+        const spd = b.speed || 920;
+        b.vx = Math.cos(targetAng) * spd;
+        b.vy = Math.sin(targetAng) * spd;
+        if (prevT < launchAt) {
+          b.x = holdX;
+          b.y = holdY;
+        }
+        Enemy.recordBulletTrail(b, 14);
+        const effDt = prevT < launchAt ? (t - launchAt) : dt;
+        b.x += b.vx * effDt;
+        b.y += b.vy * effDt;
+      }
+      return;
+    }
+
+    if (b.motionMode === 'arc') {
+      const dur = Math.max(0.1, b.arcDur || 1.4);
+      const startX = b.arcStartX !== undefined ? b.arcStartX : b.x;
+      const startY = b.arcStartY !== undefined ? b.arcStartY : b.y;
+      const targetX = b.arcTargetX !== undefined ? b.arcTargetX : b.x;
+      const targetY = b.arcTargetY !== undefined ? b.arcTargetY : GAME_CONFIG.PADDLE.Y;
+      const bend = b.arcBend || 0;
+      b.arcElapsed = (b.arcElapsed || 0) + dt;
+      const u = b.arcElapsed / dur;
+
+      Enemy.recordBulletTrail(b, 14);
+
+      if (u <= 1) {
+        const dxLin = targetX - startX;
+        const dyLin = targetY - startY;
+        b.x = startX + dxLin * u + bend * Math.sin(Math.PI * u);
+        b.y = startY + dyLin * u;
+        b.vx = dxLin / dur + bend * (Math.PI / dur) * Math.cos(Math.PI * u);
+        b.vy = dyLin / dur;
+        b.speed = Math.hypot(b.vx, b.vy);
+        b.angle = Math.atan2(b.vy, b.vx);
+      } else {
+        b.x += b.vx * dt;
+        b.y += b.vy * dt;
+      }
+      return;
+    }
+
+    if (b.shape === 'crescent' || b.bounceWalls) {
+      Enemy.recordBulletTrail(b, 14);
+    }
+
     b.x += b.vx * dt;
     b.y += b.vy * dt;
+
+    if (b.bounceWalls) {
+      const margin = 8;
+      if (b.x <= margin && b.vx < 0) {
+        b.x = margin + (margin - b.x);
+        b.vx = -b.vx;
+        b.angle = Math.atan2(b.vy, b.vx);
+      } else if (b.x >= GAME_CONFIG.WIDTH - margin && b.vx > 0) {
+        b.x = (GAME_CONFIG.WIDTH - margin) - (b.x - (GAME_CONFIG.WIDTH - margin));
+        b.vx = -b.vx;
+        b.angle = Math.atan2(b.vy, b.vx);
+      }
+    }
+  }
+
+  /**
+   * 残像付き敵弾の過去座標を一定間隔で記録する
+   */
+  static recordBulletTrail(b, maxLen = 14) {
+    if (!Array.isArray(b.trail)) {
+      b.trail = [];
+    }
+    const last = b.trail.length > 0 ? b.trail[b.trail.length - 1] : null;
+    if (!last || Math.hypot(b.x - last.x, b.y - last.y) >= 4) {
+      b.trail.push({ x: b.x, y: b.y });
+      if (b.trail.length > maxLen) {
+        b.trail.shift();
+      }
+    }
   }
 
   /**
@@ -355,7 +469,7 @@ class Enemy {
     const paddleList = Array.isArray(paddles) ? paddles : (paddles ? [paddles] : []);
     this.stepMovementAndAnimation(dt, paddleList);
 
-    // aimed_fall (scissors): fire_rate経過後に1秒その位置で止まり赤白点滅、1秒経過後に高速＋残像で下へ降下
+    // aimed_fall (scissors): fire_rate経過後に1秒その位置で止まり赤白点滅、1秒経過後に高速＋残像で下へ降下（雲に隠れている間は攻撃不可）
     if (this.movement_type === 'aimed_fall') {
       if (this.aimedFallPhase === 'aiming') {
         if (this._aimedFallTargetChanged) {
@@ -364,14 +478,16 @@ class Enemy {
             netHooks.onEnemyStateSync(this, 2);
           }
         }
-        this.fireTimer -= dt;
-        if (this.fireTimer <= 0) {
-          this.aimedFallPhase = 'charging';
-          this.aimedFallTimer = 1.0;
-          this.vx = 0;
-          this.vy = 0;
-          if (netHooks && netHooks.onEnemyStateSync) {
-            netHooks.onEnemyStateSync(this, 2);
+        if (!this.hiddenByCloud) {
+          this.fireTimer -= dt;
+          if (this.fireTimer <= 0) {
+            this.aimedFallPhase = 'charging';
+            this.aimedFallTimer = 1.0;
+            this.vx = 0;
+            this.vy = 0;
+            if (netHooks && netHooks.onEnemyStateSync) {
+              netHooks.onEnemyStateSync(this, 2);
+            }
           }
         }
       } else if (this.aimedFallPhase === 'charging') {
@@ -403,7 +519,7 @@ class Enemy {
           this.laserAimLocked = false;
           this.laserDamageCooldowns.clear();
         }
-      } else if (this.y >= this.currentRadius && this.fire_rate > 0) {
+      } else if (!this.hiddenByCloud && this.y >= this.currentRadius && this.fire_rate > 0) {
         this.fireTimer -= dt;
         if (this.fireTimer <= 1.0 && !this.laserAimLocked) {
           this.laserAimLocked = true;
@@ -434,8 +550,10 @@ class Enemy {
         }
       }
     } else if (
-      // 通常射撃タイプの敵は画面内に入ってから、射撃間隔 (fire_rate) に従って弾を発射
+      // 通常射撃タイプの敵は画面内に入り、かつ雲に隠れていない時に射撃間隔 (fire_rate) に従って弾を発射
+      !this.hiddenByCloud &&
       this.bullet_type !== 'self_destruction' &&
+      this.bullet_type !== 'self_explosion' &&
       this.bullet_type !== 'connect' &&
       this.fire_rate > 0 &&
       this.y >= this.currentRadius
@@ -481,9 +599,10 @@ class Enemy {
     // self_destruction / connect の敵のみ、敵自体がパドルへの被弾判定を持ち、触れると消滅する
     if (this.bullet_type === 'self_destruction' || this.bullet_type === 'connect') {
       const hitX = this.x;
+      const hitHalfW = this.name === 'square' ? this.currentRadius * 0.85 : 0;
       const prevHitY = (this._prevY !== undefined ? this._prevY : this.y) + this.currentRadius * 0.75;
       const hitY = this.y + this.currentRadius * 0.75;
-      const minHitY = Math.min(prevHitY, hitY);
+      const minHitY = Math.min(prevHitY, hitY) - hitHalfW;
       const maxHitY = Math.max(prevHitY, hitY);
       let hitAny = false;
       for (const p of paddleList) {
@@ -493,7 +612,7 @@ class Enemy {
         const pTop = p.y - p.height / 2;
         const pBottom = p.y + p.height / 2;
 
-        if (hitX >= pLeft && hitX <= pRight && maxHitY >= pTop && minHitY <= pBottom) {
+        if (hitX + hitHalfW >= pLeft && hitX - hitHalfW <= pRight && maxHitY >= pTop && minHitY <= pBottom) {
           onDamagePaddle(p, this.damage);
           hitAny = true;
         }
@@ -501,6 +620,32 @@ class Enemy {
       if (hitAny) {
         effectsManager.spawnCircleParticles(this.x, this.y, COLORS.red, 10, 40, 150);
         return false; // 消滅
+      }
+    } else if (this.bullet_type === 'self_explosion') {
+      // bomb (self_explosion): パドルに触れるかパドルのY座標まで降下すると爆発し、距離に応じた割合ダメージを与える
+      const { PADDLE } = GAME_CONFIG;
+      let shouldExplode = this.y >= PADDLE.Y;
+      if (!shouldExplode) {
+        const hitHalfW = this.currentRadius * 0.72;
+        const prevHitY = (this._prevY !== undefined ? this._prevY : this.y) + this.currentRadius * 0.72;
+        const hitY = this.y + this.currentRadius * 0.72;
+        const minHitY = Math.min(prevHitY, hitY) - hitHalfW;
+        const maxHitY = Math.max(prevHitY, hitY);
+        for (const p of paddleList) {
+          if (!p || p.hp <= 0 || p.invincibleTimer > 0) continue;
+          const pLeft = p.x - p.currentWidth / 2;
+          const pRight = p.x + p.currentWidth / 2;
+          const pTop = p.y - p.height / 2;
+          const pBottom = p.y + p.height / 2;
+          if (this.x + hitHalfW >= pLeft && this.x - hitHalfW <= pRight && maxHitY >= pTop && minHitY <= pBottom) {
+            shouldExplode = true;
+            break;
+          }
+        }
+      }
+      if (shouldExplode) {
+        this.triggerSelfExplosion(effectsManager, paddleList, onDamagePaddle, netHooks);
+        return false; // 爆発して消滅
       }
     }
 
@@ -540,6 +685,26 @@ class Enemy {
 
     // aimed_fall (scissors) の1秒停止中は完全停止
     if (this.movement_type === 'aimed_fall' && this.aimedFallPhase === 'charging') {
+      return;
+    }
+
+    // gravity_fall (Cloudボスが落とす四角形ダメージ箱): 重力加速度＋初期速度ベクトルを適用
+    if (this.movement_type === 'gravity_fall' || this.gravity > 0) {
+      const g = this.gravity || 360;
+      const prevVy = this.vy;
+      this.vy += g * dt;
+      this.y += 0.5 * (prevVy + this.vy) * dt;
+      this.x += this.vx * dt;
+      const minX = this.currentRadius;
+      const maxX = WIDTH - this.currentRadius;
+      if (this.x < minX) {
+        this.x = minX;
+        this.vx = Math.abs(this.vx);
+      } else if (this.x > maxX) {
+        this.x = maxX;
+        this.vx = -Math.abs(this.vx);
+      }
+      this.rotation += ((this.vx || 0) * 0.012 + 1.8) * dt;
       return;
     }
 
@@ -605,6 +770,23 @@ class Enemy {
         this.x = maxX;
         this.vx = -Math.abs(this.vx);
       }
+    } else if (this.movement_type === 'float') {
+      // retroのように画面端で折り返しつつ、横移動速度と回転速度に揺らぎがある
+      const phase = (this.id || 0) * 1.3;
+      const speedFactor = 1.0 + Math.sin(this.timeAlive * 2.1 + phase) * 0.35;
+      this.x += this.vx * speedFactor * dt;
+      const minX = this.currentRadius;
+      const maxX = WIDTH - this.currentRadius;
+      if (this.vx < 0 && this.x <= minX) {
+        this.x = minX;
+        this.vx = Math.abs(this.vx);
+      } else if (this.vx > 0 && this.x >= maxX) {
+        this.x = maxX;
+        this.vx = -Math.abs(this.vx);
+      }
+      const rotDir = (this.id || 0) % 2 === 0 ? 1 : -1;
+      const rotSpeed = 0.65 + Math.sin(this.timeAlive * 1.7 + phase * 0.7) * 0.3;
+      this.rotation += rotDir * rotSpeed * dt;
     } else if (this.movement_type === 'sway') {
       this.x = ColorUtils.clamp(
         this.originX + Math.sin(this.timeAlive * 2.2) * 85,
@@ -612,6 +794,17 @@ class Enemy {
         WIDTH - this.currentRadius - 12
       );
       this.rotation = Math.sin(this.timeAlive * 2.2) * 0.25;
+    } else if (this.movement_type === 'parasol') {
+      const margin = this.currentRadius + 16;
+      const dir = (this.id || 0) % 2 === 0 ? 1 : -1;
+      const targetX = ColorUtils.clamp(
+        this.originX + Math.sin(this.timeAlive * 1.55) * 76 * dir,
+        margin,
+        WIDTH - margin
+      );
+      this.vx = dt > 0 ? (targetX - this.x) / dt : 0;
+      this.x = targetX;
+      this.rotation = Math.sin(this.timeAlive * 1.55) * 0.22 * dir;
     } else if (this.movement_type === 'hover') {
       this.x += this.vx * dt;
       if (this.x - this.currentRadius <= 20) {
@@ -642,12 +835,14 @@ class Enemy {
 
     if (this.movement_type === 'aimed_fall') {
       if (this.aimedFallPhase === 'aiming') {
-        this.fireTimer -= dt;
-        if (this.fireTimer <= 0) {
-          this.aimedFallPhase = 'charging';
-          this.aimedFallTimer = 1.0;
-          this.vx = 0;
-          this.vy = 0;
+        if (!this.hiddenByCloud) {
+          this.fireTimer -= dt;
+          if (this.fireTimer <= 0) {
+            this.aimedFallPhase = 'charging';
+            this.aimedFallTimer = 1.0;
+            this.vx = 0;
+            this.vy = 0;
+          }
         }
       } else if (this.aimedFallPhase === 'charging') {
         this.aimedFallTimer -= dt;
@@ -667,7 +862,7 @@ class Enemy {
           this.laserActiveTimer = 0;
           this.laserAimLocked = false;
         }
-      } else if (this.y >= this.currentRadius && this.fire_rate > 0) {
+      } else if (!this.hiddenByCloud && this.y >= this.currentRadius && this.fire_rate > 0) {
         this.fireTimer -= dt;
         if (this.fireTimer <= 1.0 && !this.laserAimLocked) {
           this.laserAimLocked = true;
@@ -682,7 +877,7 @@ class Enemy {
           this.fireTimer = this.fire_rate;
         }
       }
-    } else if (this.localAutoFire && this.isDeterministicShooter()) {
+    } else if (!this.hiddenByCloud && this.localAutoFire && this.isDeterministicShooter()) {
       // 確定的エネミーは最初の射撃タイムスタンプ受信後、ローカルで後続射撃を完全再現する
       this.fireTimer -= dt;
       let guard = 0;
@@ -691,6 +886,10 @@ class Enemy {
         this.fireBullet([], enemyBullets);
         this.fireTimer += this.fire_rate;
       }
+    }
+
+    if (this.bullet_type === 'self_explosion' && this.y > GAME_CONFIG.PADDLE.Y) {
+      this.y = GAME_CONFIG.PADDLE.Y;
     }
 
     return this.y - this.currentRadius <= HEIGHT + 20;
@@ -742,24 +941,163 @@ class Enemy {
     return b;
   }
 
+  _fireSingleDownBullet(enemyBullets, deterministic = true) {
+    const seq = deterministic ? this._shotSeq++ : undefined;
+    const b = {
+      x: this.x,
+      y: this.y + this.currentRadius,
+      vx: 0,
+      vy: 205,
+      angle: Math.PI / 2,
+      speed: 205,
+      damage: this.damage,
+      timer: 0
+    };
+    if (deterministic) {
+      b.id = Enemy.makeAutoBulletId(this.id, seq, 0);
+    }
+    enemyBullets.push(b);
+    return b;
+  }
+
+  _fireAimedBullet(paddleList, enemyBullets, predictLead = false, speed = 230, shape = undefined) {
+    const { WIDTH, PADDLE } = GAME_CONFIG;
+    const alivePaddles = Array.isArray(paddleList) ? paddleList.filter((p) => p && p.hp > 0) : [];
+    if (alivePaddles.length === 0) return null;
+
+    let best = alivePaddles[0];
+    let bestDist = Math.abs(best.x - this.x);
+    for (let i = 1; i < alivePaddles.length; i++) {
+      const d = Math.abs(alivePaddles[i].x - this.x);
+      if (d < bestDist) {
+        bestDist = d;
+        best = alivePaddles[i];
+      }
+    }
+
+    const spawnY = this.y + this.currentRadius * 0.8;
+    const dy = PADDLE.Y - spawnY;
+    let targetX = best.x;
+    if (predictLead && dy > 0) {
+      const halfW = best.currentWidth * 0.5;
+      const pv = best.vx || 0;
+      const t1 = Math.hypot(targetX - this.x, dy) / speed;
+      const px1 = ColorUtils.clamp(best.x + pv * t1, halfW, WIDTH - halfW);
+      const t2 = Math.hypot(px1 - this.x, dy) / speed;
+      targetX = ColorUtils.clamp(best.x + pv * t2, halfW, WIDTH - halfW);
+    }
+
+    const dx = targetX - this.x;
+    if (!Enemy.isAimAngleValid(dx, dy)) {
+      return null;
+    }
+
+    const a = Math.atan2(dy, dx);
+    const b = {
+      x: this.x,
+      y: spawnY,
+      vx: Math.cos(a) * speed,
+      vy: Math.sin(a) * speed,
+      angle: a,
+      speed,
+      damage: this.damage,
+      timer: 0
+    };
+    if (shape) {
+      b.shape = shape;
+      if (shape === 'crescent') {
+        b.trail = [{ x: b.x, y: b.y }];
+      }
+    }
+    enemyBullets.push(b);
+    return b;
+  }
+
+  _spawnCounterRadialBullets(count, enemyBullets) {
+    const spawned = [];
+    const speed = 215;
+    const baseAngle = Math.PI / 2;
+    const radius = this.currentRadius * 0.7;
+    for (let i = 0; i < count; i++) {
+      const a = baseAngle + (i * Math.PI * 2) / count;
+      const b = {
+        x: this.x + Math.cos(a) * radius,
+        y: this.y + Math.sin(a) * radius,
+        vx: Math.cos(a) * speed,
+        vy: Math.sin(a) * speed,
+        angle: a,
+        speed,
+        damage: this.damage,
+        timer: 0
+      };
+      if (enemyBullets) {
+        enemyBullets.push(b);
+      }
+      spawned.push(b);
+      this._pendingSpawnedBullets.push(b);
+    }
+    return spawned;
+  }
+
+  triggerSelfExplosion(effectsManager, paddleList = [], onDamagePaddle = null, netHooks = null) {
+    const { COLORS } = GAME_CONFIG;
+    const innerR = this.currentRadius * 0.7;
+    const outerR = 260;
+    if (onDamagePaddle && Array.isArray(paddleList)) {
+      for (const p of paddleList) {
+        if (!p || p.hp <= 0 || p.invincibleTimer > 0) continue;
+        const nearestX = ColorUtils.clamp(this.x, p.x - p.currentWidth / 2, p.x + p.currentWidth / 2);
+        const nearestY = ColorUtils.clamp(this.y, p.y - p.height / 2, p.y + p.height / 2);
+        const dist = Math.hypot(this.x - nearestX, this.y - nearestY);
+        if (dist <= outerR) {
+          const scale = dist <= innerR ? 1 : ColorUtils.clamp(1 - (dist - innerR) / (outerR - innerR), 0, 1);
+          const dmg = Math.round(this.damage * scale);
+          if (dmg > 0) {
+            onDamagePaddle(p, dmg);
+          }
+        }
+      }
+    }
+    if (effectsManager) {
+      effectsManager.spawnPulse({
+        kind: 'circle',
+        subType: 'bomb',
+        x: this.x,
+        y: this.y,
+        radius: this.currentRadius,
+        color: COLORS.white,
+        duration: 0.42,
+        maxScale: outerR / Math.max(1, this.currentRadius)
+      });
+    }
+    if (netHooks && netHooks.onBombExplode) {
+      netHooks.onBombExplode(this, outerR);
+    }
+  }
+
+  consumePendingBullets() {
+    if (!this._pendingSpawnedBullets || this._pendingSpawnedBullets.length === 0) {
+      return [];
+    }
+    const out = this._pendingSpawnedBullets;
+    this._pendingSpawnedBullets = [];
+    return out;
+  }
+
+  consumePendingSplitEnemies() {
+    if (!this._pendingSplitEnemies || this._pendingSplitEnemies.length === 0) {
+      return [];
+    }
+    const out = this._pendingSplitEnemies;
+    this._pendingSplitEnemies = [];
+    return out;
+  }
+
   fireBullet(paddleList, enemyBullets) {
     const { PADDLE } = GAME_CONFIG;
     const spawned = [];
     if (this.bullet_type === 'single') {
-      const seq = this._shotSeq++;
-      const b = {
-        id: Enemy.makeAutoBulletId(this.id, seq, 0),
-        x: this.x,
-        y: this.y + this.currentRadius,
-        vx: 0,
-        vy: 205,
-        angle: Math.PI / 2,
-        speed: 205,
-        damage: this.damage,
-        timer: 0
-      };
-      enemyBullets.push(b);
-      spawned.push(b);
+      spawned.push(this._fireSingleDownBullet(enemyBullets, true));
     } else if (this.bullet_type === 'spread') {
       const seq = this._shotSeq++;
       const angles = [Math.PI / 2 - 0.26, Math.PI / 2, Math.PI / 2 + 0.26];
@@ -829,57 +1167,72 @@ class Enemy {
       };
       enemyBullets.push(b);
       spawned.push(b);
-    } else if (this.bullet_type === 'aimed') {
-      const alivePaddles = paddleList.filter((p) => p && p.hp > 0);
-      if (alivePaddles.length === 0) return spawned;
-
-      let best = alivePaddles[0];
-      let bestDist = Math.abs(best.x - this.x);
-      for (let i = 1; i < alivePaddles.length; i++) {
-        const d = Math.abs(alivePaddles[i].x - this.x);
-        if (d < bestDist) {
-          bestDist = d;
-          best = alivePaddles[i];
-        }
-      }
-
-      const spawnY = this.y + this.currentRadius * 0.8;
-      const dx = best.x - this.x;
-      const dy = PADDLE.Y - spawnY;
-
-      // パドルより下（反対側＝上向き）に向かう場合や、真下からの角度がつきすぎている場合（> 60°）は射撃しない
-      if (!Enemy.isAimAngleValid(dx, dy)) {
-        return spawned;
-      }
-
-      const a = Math.atan2(dy, dx);
-      const b = {
-        x: this.x,
-        y: spawnY,
-        vx: Math.cos(a) * 230,
-        vy: Math.sin(a) * 230,
-        angle: a,
-        speed: 230,
-        damage: this.damage,
-        timer: 0
-      };
-      enemyBullets.push(b);
-      spawned.push(b);
+    } else if (this.bullet_type === 'aimed' || this.bullet_type === 'slice') {
+      const b = this._fireAimedBullet(paddleList, enemyBullets, false, 230);
+      if (b) spawned.push(b);
+    } else if (this.bullet_type === 'counter') {
+      const useAimed = this._counterUseAimed;
+      this._counterUseAimed = !this._counterUseAimed;
+      const b = useAimed
+        ? this._fireAimedBullet(paddleList, enemyBullets, false, 230)
+        : this._fireSingleDownBullet(enemyBullets, false);
+      if (b) spawned.push(b);
+    } else if (this.bullet_type === 'crescent') {
+      const b = this._fireAimedBullet(paddleList, enemyBullets, true, 290, 'crescent');
+      if (b) spawned.push(b);
     }
     return spawned;
   }
 
-  hitByBall(ball, effectsManager, forceInstantKill = false) {
-    const { COLORS, ENEMY } = GAME_CONFIG;
+  hitByBall(ball, effectsManager, forceInstantKill = false, enemyBullets = null) {
+    const { COLORS, ENEMY, WIDTH } = GAME_CONFIG;
     const visualScale = (ENEMY && ENEMY.VISUAL_SCALE) || 1.5;
-    const isCyanBall = ball.effects.cyan > 0;
+    const isCyanBall = ball && ball.effects && ball.effects.cyan > 0;
     if (isCyanBall || forceInstantKill) {
       this.health = 0;
     } else {
       this.health -= 1;
     }
 
+    if (this.bullet_type === 'counter') {
+      const radialCount = this.health > 0 ? 6 : 12;
+      this._spawnCounterRadialBullets(radialCount, enemyBullets);
+    }
+
     if (this.health > 0) {
+      if (this.bullet_type === 'slice') {
+        // circle が破壊に至らないダメージを受けると 2 体の semicircle に分裂する
+        const childDef = (typeof ENEMIES !== 'undefined' && ENEMIES.semicircle)
+          ? ENEMIES.semicircle
+          : { name: 'semicircle', bullet_type: 'aimed', movement_type: 'retro', health: 1, damage: this.damage, fire_rate: this.fire_rate };
+        const leftChild = new Enemy(childDef, Math.max(24, this.x - 14), undefined, -95);
+        leftChild.y = this.y;
+        leftChild.rotation = Math.PI;
+        leftChild.fireTimer = Math.max(0.6, this.fireTimer || 0.8);
+        leftChild.hitCooldown = 0.14;
+
+        const rightChild = new Enemy(childDef, Math.min(WIDTH - 24, this.x + 14), undefined, 95);
+        rightChild.y = this.y;
+        rightChild.rotation = 0;
+        rightChild.fireTimer = Math.max(0.6, this.fireTimer || 0.8);
+        rightChild.hitCooldown = 0.14;
+
+        this._pendingSplitEnemies.push(leftChild, rightChild);
+        effectsManager.spawnPulse({
+          kind: 'enemy',
+          subType: this.name,
+          x: this.x,
+          y: this.y,
+          radius: this.currentRadius * visualScale,
+          angle: this.rotation,
+          color: COLORS.white,
+          duration: 0.42,
+          maxScale: 2.15
+        });
+        effectsManager.spawnCircleParticles(this.x, this.y, COLORS.white, 8, 45, 150);
+        return false; // スコア・アイテム付与なしの分裂置換
+      }
+
       // 縮小し、縮小時に1回だけパルスアニメーション
       const prevRadius = this.currentRadius;
       const healthRatio = this.health / this.maxHealth;
@@ -900,6 +1253,11 @@ class Enemy {
     }
 
     // 撃破
+    if (this.bullet_type === 'self_explosion') {
+      this._pendingSelfExplosion = true;
+      return true;
+    }
+
     effectsManager.spawnPulse({
       kind: 'enemy',
       subType: this.name,
@@ -978,6 +1336,7 @@ class Enemy {
     let drawColor = COLORS.white;
     const isHazardBody =
       this.bullet_type === 'connect' ||
+      this.bullet_type === 'self_explosion' ||
       (this.bullet_type === 'self_destruction' && (
         this.movement_type !== 'aimed_fall' || this.aimedFallPhase !== 'aiming'
       ));

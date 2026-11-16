@@ -17,6 +17,7 @@ class Paddle {
 
     this.x = options.x !== undefined ? options.x : defaultX;
     this.y = PADDLE.Y;
+    this.vx = 0;
     this.hp = this.maxHp;
     this.currentWidth = this.computeWidthForHp(this.hp);
     this.height = PADDLE.HEIGHT;
@@ -25,6 +26,11 @@ class Paddle {
     this.effectClock = 0;
     this.pulseTimer = 0;
     this.invincibleTimer = 0;
+    this.guardTimer = 0;
+    this.guardScaleInTimer = 0;
+    this.guardScaleOutTimer = 0;
+    this.guardPulseTimer = 0;
+    this.guardIconPulseTimer = 0;
     this.respawnTimer = 0;
     this.respawnPenalty = 0;
     this._deathRespawnHandled = false;
@@ -43,7 +49,11 @@ class Paddle {
   }
 
   moveHorizontal(dt, input) {
-    if (this.hp <= 0) return;
+    if (this.hp <= 0) {
+      this.vx = 0;
+      return;
+    }
+    const prevX = this.x;
     const halfW = this.currentWidth / 2;
     const maxStep = this.getSpeed() * dt;
 
@@ -63,14 +73,92 @@ class Paddle {
     }
 
     this.x = ColorUtils.clamp(this.x, halfW, GAME_CONFIG.WIDTH - halfW);
+    this.vx = dt > 0 ? (this.x - prevX) / dt : 0;
+  }
+
+  activateGuard(duration = 30) {
+    this.guardTimer = duration > 0 ? duration : 30;
+    this.guardScaleInTimer = 0.32;
+    this.guardScaleOutTimer = 0;
+    this.guardPulseTimer = 0;
+    this.guardIconPulseTimer = 0;
+  }
+
+  stepGuardTimers(dt, effectsManager = null) {
+    if (this.guardScaleInTimer > 0) {
+      this.guardScaleInTimer = Math.max(0, this.guardScaleInTimer - dt);
+    }
+    if (this.guardScaleOutTimer > 0) {
+      this.guardScaleOutTimer = Math.max(0, this.guardScaleOutTimer - dt);
+    }
+    if (this.guardTimer > 0) {
+      this.guardTimer = Math.max(0, this.guardTimer - dt);
+      this.guardPulseTimer += dt;
+      if (this.guardTimer > 0 && this.guardScaleInTimer <= 0 && effectsManager) {
+        const interval = (GAME_CONFIG.ITEM && GAME_CONFIG.ITEM.PULSE_INTERVAL) || 0.5;
+        this.guardIconPulseTimer += dt;
+        if (this.guardIconPulseTimer >= interval) {
+          this.guardIconPulseTimer -= interval;
+          const shieldPos = this.getShieldIconPosition();
+          effectsManager.spawnPulse({
+            kind: 'shield',
+            target: this,
+            offsetY: shieldPos.y - this.y,
+            x: shieldPos.x,
+            y: shieldPos.y,
+            w: shieldPos.w,
+            h: shieldPos.h,
+            color: GAME_CONFIG.COLORS.white,
+            duration: 0.45,
+            maxScale: 1.85
+          }, false);
+        }
+      }
+      if (this.guardTimer <= 0) {
+        this.guardScaleOutTimer = 0.25;
+        this.guardIconPulseTimer = 0;
+        this.invincibleTimer = Math.max(this.invincibleTimer, 1.0);
+      }
+    } else {
+      this.guardIconPulseTimer = 0;
+    }
+  }
+
+  _stepPaddlePulse(dt, effectsManager) {
+    if (!effectsManager) return;
+    const { ITEM } = GAME_CONFIG;
+    if (ColorUtils.hasAnyStarEffect(this.effects)) {
+      this.pulseTimer += dt;
+      if (this.pulseTimer >= ITEM.PULSE_INTERVAL) {
+        this.pulseTimer -= ITEM.PULSE_INTERVAL;
+        const currentColor = ColorUtils.getStarEffectColor(this.effects, this.effectClock);
+        effectsManager.spawnPulse({
+          kind: 'rect',
+          target: this,
+          x: this.x,
+          y: this.y,
+          w: this.currentWidth,
+          h: this.height,
+          color: currentColor,
+          duration: 0.45,
+          maxScale: 1.85
+        }, false);
+      }
+    } else {
+      this.pulseTimer = 0;
+    }
   }
 
   update(dt, input, effectsManager) {
-    if (this.hp <= 0) return;
+    if (this.hp <= 0) {
+      this.vx = 0;
+      return;
+    }
 
     if (this.invincibleTimer > 0) {
       this.invincibleTimer = Math.max(0, this.invincibleTimer - dt);
     }
+    this.stepGuardTimers(dt, effectsManager);
 
     const { WIDTH, PADDLE, ITEM } = GAME_CONFIG;
     this.moveHorizontal(dt, input);
@@ -101,26 +189,10 @@ class Paddle {
 
     if (ColorUtils.hasAnyStarEffect(this.effects)) {
       this.effectClock += dt;
-      this.pulseTimer += dt;
-      if (this.pulseTimer >= ITEM.PULSE_INTERVAL) {
-        this.pulseTimer -= ITEM.PULSE_INTERVAL;
-        const currentColor = ColorUtils.getStarEffectColor(this.effects, this.effectClock);
-        effectsManager.spawnPulse({
-          kind: 'rect',
-          target: this,
-          x: this.x,
-          y: this.y,
-          w: this.currentWidth,
-          h: this.height,
-          color: currentColor,
-          duration: 0.45,
-          maxScale: 1.85
-        }, false);
-      }
     } else if (activeBefore) {
       this.effectClock = 0;
-      this.pulseTimer = 0;
     }
+    this._stepPaddlePulse(dt, effectsManager);
   }
 
   /**
@@ -128,7 +200,7 @@ class Paddle {
    */
   updateCosmeticEffects(dt, effectsManager) {
     if (this.hp <= 0 || !effectsManager) return;
-    const { PADDLE, ITEM } = GAME_CONFIG;
+    const { PADDLE } = GAME_CONFIG;
     if (this.hp < this.maxHp) {
       this.timeSinceLastDamage += dt;
       if (this.timeSinceLastDamage >= PADDLE.REGEN_DELAY) {
@@ -139,26 +211,7 @@ class Paddle {
         }
       }
     }
-    if (ColorUtils.hasAnyStarEffect(this.effects)) {
-      this.pulseTimer += dt;
-      if (this.pulseTimer >= ITEM.PULSE_INTERVAL) {
-        this.pulseTimer -= ITEM.PULSE_INTERVAL;
-        const currentColor = ColorUtils.getStarEffectColor(this.effects, this.effectClock);
-        effectsManager.spawnPulse({
-          kind: 'rect',
-          target: this,
-          x: this.x,
-          y: this.y,
-          w: this.currentWidth,
-          h: this.height,
-          color: currentColor,
-          duration: 0.45,
-          maxScale: 1.85
-        }, false);
-      }
-    } else {
-      this.pulseTimer = 0;
-    }
+    this._stepPaddlePulse(dt, effectsManager);
   }
 
   /**
@@ -182,6 +235,15 @@ class Paddle {
     return this.getMaxWidth() * Math.max(0, hp) / this.maxHp;
   }
 
+  getShieldIconPosition() {
+    return {
+      x: this.x,
+      y: this.y + this.height / 2 + 27,
+      w: 13,
+      h: 15
+    };
+  }
+
   revive(newMaxHp, effectsManager, totalPlayers) {
     const { COLORS, WIDTH } = GAME_CONFIG;
     if (totalPlayers !== undefined) {
@@ -195,6 +257,7 @@ class Paddle {
     this.timeSinceLastDamage = 0;
     this.regenParticleTimer = 0;
     this.invincibleTimer = 3.0;
+    this.guardTimer = 0;
     this.respawnTimer = 0;
     this._deathRespawnHandled = false;
     const halfW = this.currentWidth / 2;
@@ -217,6 +280,18 @@ class Paddle {
 
   takeDamage(damageAmount, effectsManager) {
     if (this.hp <= 0 || this.invincibleTimer > 0) return false;
+
+    if (this.guardTimer > 0) {
+      this.guardTimer = 0;
+      this.guardScaleInTimer = 0;
+      this.guardScaleOutTimer = 0;
+      this.invincibleTimer = Math.max(this.invincibleTimer, 1.0);
+      if (effectsManager && typeof effectsManager.spawnShieldShatter === 'function') {
+        const shieldPos = this.getShieldIconPosition();
+        effectsManager.spawnShieldShatter(shieldPos.x, shieldPos.y, shieldPos.w, shieldPos.h, this.x, true, this);
+      }
+      return false;
+    }
 
     const { COLORS } = GAME_CONFIG;
     const oldHp = this.hp;
@@ -254,8 +329,13 @@ class Paddle {
     ctx.save();
     ctx.fillStyle = ColorUtils.getStarEffectColor(this.effects, this.effectClock);
     let paddleAlpha = (showMultiplayerTags && !this.isLocal) ? 0.75 : 1.0;
-    if (isBlinkDimmed) {
-      paddleAlpha *= 0.75;
+    if (this.invincibleTimer > 0) {
+      if (isBlinkDimmed) {
+        paddleAlpha *= 0.75;
+      }
+    } else if (this.guardTimer > 0) {
+      const wave = 0.5 + 0.5 * Math.cos(2 * Math.PI * (this.guardPulseTimer % 1.0));
+      paddleAlpha *= 0.75 + 0.25 * wave;
     }
     ctx.globalAlpha = paddleAlpha;
     ctx.fillRect(this.x - this.currentWidth / 2, this.y - this.height / 2, this.currentWidth, this.height);
@@ -321,6 +401,42 @@ class Paddle {
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(this.nickname, this.x, textY);
+      }
+    }
+
+    if (this.guardTimer > 0 || this.guardScaleOutTimer > 0) {
+      const shieldPos = this.getShieldIconPosition();
+      const isShieldBlinkDimmed =
+        this.guardTimer > 0 &&
+        this.guardTimer <= 10.0 &&
+        Math.floor(Math.max(0, 10.0 - this.guardTimer) / 0.25) % 2 === 1;
+      let shieldAlpha = (showMultiplayerTags && !this.isLocal) ? 0.75 : 1.0;
+      if (isShieldBlinkDimmed) {
+        shieldAlpha *= 0.75;
+      }
+
+      let shieldScale = 1.0;
+      if (this.guardScaleOutTimer > 0) {
+        const pOut = 1 - ColorUtils.clamp(this.guardScaleOutTimer / 0.25, 0, 1);
+        const easeOutQuad = 1 - (1 - pOut) * (1 - pOut);
+        shieldScale = Math.max(0, 1 - easeOutQuad);
+      } else if (this.guardScaleInTimer > 0) {
+        const pIn = 1 - ColorUtils.clamp(this.guardScaleInTimer / 0.32, 0, 1);
+        const c1 = 1.70158;
+        const c3 = c1 + 1;
+        shieldScale = Math.max(0, 1 + c3 * Math.pow(pIn - 1, 3) + c1 * Math.pow(pIn - 1, 2));
+      }
+
+      if (shieldScale > 0.01) {
+        ShapeRenderer.drawShieldIcon(
+          ctx,
+          shieldPos.x,
+          shieldPos.y,
+          shieldPos.w * shieldScale,
+          shieldPos.h * shieldScale,
+          GAME_CONFIG.COLORS.white,
+          shieldAlpha
+        );
       }
     }
     ctx.restore();

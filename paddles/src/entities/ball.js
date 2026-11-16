@@ -337,7 +337,7 @@ class Ball {
         if (enemy.hitCooldown > 0) continue;
         const dist = Math.hypot(this.x - enemy.x, this.y - enemy.y);
         if (dist <= this.radius + enemy.currentRadius) {
-          const destroyed = enemy.hitByBall(this, effectsManager, !!swingActive);
+          const destroyed = enemy.hitByBall(this, effectsManager, !!swingActive, context.enemyBullets || null);
           enemy.hitCooldown = 0.08;
 
           const shouldPierce = this.effects.cyan > 0 || !!swingActive;
@@ -359,15 +359,7 @@ class Ball {
             if (onBounce) onBounce(this, 'enemy');
           }
 
-          if (destroyed) {
-            const enemyDropChance = context.enemyDropChance !== undefined ? context.enemyDropChance : 0.42;
-            onScore(150 * enemy.maxHealth);
-            onSpawnItem(enemy.x, enemy.y, enemyDropChance);
-            if (context.onEnemyEvent) context.onEnemyEvent(enemy, true);
-            enemies.splice(eIdx, 1);
-          } else if (context.onEnemyEvent) {
-            context.onEnemyEvent(enemy, false);
-          }
+          this._resolveEnemyHit(enemy, eIdx, destroyed, context);
           if (!shouldPierce) break;
         }
       }
@@ -491,6 +483,50 @@ class Ball {
     return circles;
   }
 
+  _resolveEnemyHit(enemy, eIdx, destroyed, context) {
+    const { enemies = [], onScore, onSpawnItem, onEnemyEvent, onBulletsSpawned, onEnemiesSpawned } = context;
+    if (typeof enemy.consumePendingBullets === 'function') {
+      const counterBullets = enemy.consumePendingBullets();
+      if (counterBullets.length > 0 && onBulletsSpawned) {
+        onBulletsSpawned(counterBullets);
+      }
+    }
+
+    const splitChildren = typeof enemy.consumePendingSplitEnemies === 'function'
+      ? enemy.consumePendingSplitEnemies()
+      : [];
+    if (splitChildren.length > 0) {
+      if (onEnemyEvent) onEnemyEvent(enemy, true);
+      enemies.splice(eIdx, 1);
+      for (const child of splitChildren) {
+        enemies.push(child);
+      }
+      if (onEnemiesSpawned) onEnemiesSpawned(splitChildren);
+      return;
+    }
+
+    if (destroyed) {
+      if (enemy._pendingSelfExplosion) {
+        enemy._pendingSelfExplosion = false;
+        if (typeof enemy.triggerSelfExplosion === 'function') {
+          enemy.triggerSelfExplosion(
+            context.effectsManager,
+            context.paddles || [],
+            context.onDamagePaddle || null,
+            context.enemyNetHooks || null
+          );
+        }
+      }
+      const enemyDropChance = context.enemyDropChance !== undefined ? context.enemyDropChance : 0.42;
+      if (onScore) onScore(150 * enemy.maxHealth);
+      if (onSpawnItem) onSpawnItem(enemy.x, enemy.y, enemyDropChance);
+      if (onEnemyEvent) onEnemyEvent(enemy, true);
+      enemies.splice(eIdx, 1);
+    } else if (onEnemyEvent) {
+      onEnemyEvent(enemy, false);
+    }
+  }
+
   handleSwingArmsCollisions(context) {
     const { enemies = [], boss = null, effectsManager, onScore, onSpawnItem } = context;
     const circles = this.getSwingArmCircles();
@@ -499,17 +535,9 @@ class Ball {
         const enemy = enemies[eIdx];
         if (enemy.hitCooldown > 0) continue;
         if (Math.hypot(c.x - enemy.x, c.y - enemy.y) <= c.r + enemy.currentRadius) {
-          const destroyed = enemy.hitByBall(this, effectsManager, false);
+          const destroyed = enemy.hitByBall(this, effectsManager, false, context.enemyBullets || null);
           enemy.hitCooldown = 0.2;
-          if (destroyed) {
-            const enemyDropChance = context.enemyDropChance !== undefined ? context.enemyDropChance : 0.42;
-            if (onScore) onScore(150 * enemy.maxHealth);
-            if (onSpawnItem) onSpawnItem(enemy.x, enemy.y, enemyDropChance);
-            if (context.onEnemyEvent) context.onEnemyEvent(enemy, true);
-            enemies.splice(eIdx, 1);
-          } else if (context.onEnemyEvent) {
-            context.onEnemyEvent(enemy, false);
-          }
+          this._resolveEnemyHit(enemy, eIdx, destroyed, context);
         }
       }
       if (boss && !boss.isDefeated()) {
