@@ -257,13 +257,16 @@ body {
 
 #room-controls {
   position: absolute;
-  bottom: 1.6%;
+  top: 2.2%;
+  bottom: auto;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
-  gap: clamp(2px, calc(var(--app-h) * 0.006), 5px);
+  justify-content: center;
+  gap: 6px;
+  height: clamp(24px, calc(var(--app-h) * 0.044), 38px);
   transition: opacity 0.25s ease, transform 0.22s ease;
   z-index: 10;
 }
@@ -318,12 +321,44 @@ body {
   display: none;
 }
 
+#copy-link-button.in-room {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+}
+
+#copy-link-button.in-room svg {
+  width: 16px;
+  height: 16px;
+}
+
 #copy-link-button.in-room .icon-link {
   display: none;
 }
 
 #copy-link-button.in-room .icon-copy {
   display: block;
+}
+
+#room-code-display {
+  width: clamp(72px, calc(var(--app-h) * 0.115), 94px);
+  border-bottom: 1.5px solid transparent;
+  color: rgba(255, 255, 255, 0.48);
+  font-family: 'Google Sans Flex', sans-serif;
+  font-size: clamp(11px, calc(var(--app-h) * 0.017), 13px);
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: 2.2px;
+  text-align: center;
+  text-transform: uppercase;
+  padding: 0 4px 1px;
+  user-select: text;
+  -webkit-user-select: text;
+  white-space: nowrap;
+}
+
+#room-code-display.hidden {
+  display: none;
 }
 
 #copy-link-button.copied {
@@ -346,8 +381,7 @@ body {
   justify-content: center;
   gap: 6px;
   height: clamp(24px, calc(var(--app-h) * 0.044), 38px);
-  margin-top: 0;
-  margin-bottom: calc(14px + clamp(2px, calc(var(--app-h) * 0.006), 5px));
+  margin: 0;
 }
 
 #room-join-row.hidden {
@@ -426,6 +460,10 @@ body {
 }
 
 #room-status {
+  position: absolute;
+  bottom: 1.6%;
+  left: 50%;
+  transform: translateX(-50%);
   color: rgba(255, 255, 255, 0.48);
   font-size: clamp(10px, calc(var(--app-h) * 0.014), 11px);
   font-weight: 500;
@@ -433,6 +471,8 @@ body {
   min-height: 14px;
   white-space: nowrap;
   pointer-events: none;
+  z-index: 10;
+  transition: opacity 0.25s ease;
 }
 
 #room-status.hidden {

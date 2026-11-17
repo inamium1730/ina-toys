@@ -61,3 +61,121 @@ class ColorUtils {
   }
 }
 
+/**
+ * ホスト共有シードに基づく決定論的PRNG (Mulberry32)
+ * 全クライアントで同一シード・同一ストリームから乱数を生成する。
+ */
+class GameRng {
+  static normalizeSeed(seed) {
+    const s = (Number(seed) || 0) >>> 0;
+    return s === 0 ? 0x6d2b79f5 : s;
+  }
+
+  static mixSeed(a, b) {
+    let h = ((Number(a) >>> 0) ^ (Math.imul(Number(b) >>> 0, 0x9e3779b1))) >>> 0;
+    h = Math.imul(h ^ (h >>> 16), 0x85ebca6b) >>> 0;
+    h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35) >>> 0;
+    h = (h ^ (h >>> 16)) >>> 0;
+    return h === 0 ? 0x9e3779b1 : h;
+  }
+
+  static fromSeed(seed) {
+    let a = GameRng.normalizeSeed(seed);
+    const next = () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    return {
+      next,
+      range(min, max) {
+        return min + next() * (max - min);
+      },
+      int(min, maxInclusive) {
+        return min + Math.floor(next() * (maxInclusive - min + 1));
+      },
+      pick(arr) {
+        if (!arr || arr.length === 0) return undefined;
+        return arr[Math.floor(next() * arr.length)];
+      },
+      shuffle(arr) {
+        for (let i = arr.length - 1; i > 0; i--) {
+          const j = Math.floor(next() * (i + 1));
+          const tmp = arr[i];
+          arr[i] = arr[j];
+          arr[j] = tmp;
+        }
+        return arr;
+      },
+      getState() {
+        return a >>> 0;
+      },
+      setState(state) {
+        a = GameRng.normalizeSeed(state);
+      }
+    };
+  }
+
+  static setGameSeed(seed) {
+    GameRng._gameSeed = GameRng.normalizeSeed(seed);
+    GameRng._stageNumber = 1;
+    GameRng._stageSeed = GameRng.mixSeed(GameRng._gameSeed, 1);
+    GameRng._shared = GameRng.fromSeed(GameRng._gameSeed);
+  }
+
+  static setStageSeed(stageNumber) {
+    const num = Math.max(1, (Number(stageNumber) | 0) || 1);
+    GameRng._stageNumber = num;
+    GameRng._stageSeed = GameRng.mixSeed(GameRng.getGameSeed(), num);
+  }
+
+  static getGameSeed() {
+    if (!GameRng._gameSeed) {
+      GameRng._gameSeed = GameRng.normalizeSeed(((Math.random() * 0xffffffff) >>> 0) || 1);
+      GameRng._stageSeed = GameRng.mixSeed(GameRng._gameSeed, GameRng._stageNumber || 1);
+    }
+    return GameRng._gameSeed;
+  }
+
+  static getStageSeed() {
+    if (!GameRng._stageSeed) {
+      GameRng._stageSeed = GameRng.mixSeed(GameRng.getGameSeed(), GameRng._stageNumber || 1);
+    }
+    return GameRng._stageSeed;
+  }
+
+  static _ensureShared() {
+    if (!GameRng._shared) {
+      GameRng._shared = GameRng.fromSeed(GameRng.getGameSeed());
+    }
+    return GameRng._shared;
+  }
+
+  static next() {
+    return GameRng._ensureShared().next();
+  }
+
+  static getState() {
+    return GameRng._ensureShared().getState();
+  }
+
+  static setState(state) {
+    GameRng._ensureShared().setState(state);
+  }
+
+  static shuffle(arr) {
+    return GameRng._ensureShared().shuffle(arr);
+  }
+
+  static pick(arr) {
+    return GameRng._ensureShared().pick(arr);
+  }
+}
+
+GameRng._gameSeed = 0;
+GameRng._stageNumber = 1;
+GameRng._stageSeed = 0;
+GameRng._shared = null;
+

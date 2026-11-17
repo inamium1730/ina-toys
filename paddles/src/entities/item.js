@@ -40,7 +40,7 @@ class Item {
   }
 
   static maybeSpawn(x, y, dropChance, items, purplePaddle, forcedType = null) {
-    if (Math.random() > dropChance) return null;
+    if (GameRng.next() > dropChance) return null;
 
     if (forcedType) {
       return new Item(x, y, forcedType, Item.getColorForType(forcedType));
@@ -64,7 +64,7 @@ class Item {
     }
 
     const totalWeight = pool.reduce((acc, entry) => acc + entry.weight, 0);
-    let r = Math.random() * totalWeight;
+    let r = GameRng.next() * totalWeight;
     let chosen = pool[0];
     for (const entry of pool) {
       if (r <= entry.weight) {
@@ -128,7 +128,7 @@ class Item {
           }
         }
         const candidates = collectors.filter((p) => (p.contestedItemsCount || 0) === minCount);
-        chosen = candidates[Math.floor(Math.random() * candidates.length)];
+        chosen = candidates[Math.floor(GameRng.next() * candidates.length)];
         chosen.contestedItemsCount = (chosen.contestedItemsCount || 0) + 1;
       }
       onCollect(this, chosen);

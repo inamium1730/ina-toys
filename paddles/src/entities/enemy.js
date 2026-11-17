@@ -6,6 +6,7 @@ class Enemy {
     Enemy.nextId = Math.max(Enemy.nextId || 0, customId !== undefined ? customId : 0) + (customId !== undefined ? 0 : 1);
     this.netKind = 'enemy';
     this.id = customId !== undefined ? customId : Enemy.nextId;
+    this.rng = GameRng.fromSeed(GameRng.mixSeed(GameRng.getStageSeed(), this.id));
 
     const visualScale = (GAME_CONFIG.ENEMY && GAME_CONFIG.ENEMY.VISUAL_SCALE) || 1.5;
     const baseRadius = 17 + (def.health - 1) * 3.5;
@@ -20,7 +21,7 @@ class Enemy {
     this.x = spawnX;
     this.y = -baseRadius * visualScale - 8; // 画面外の上から出現
     this.originX = spawnX;
-    this.vx = customVx !== undefined ? customVx : (Math.random() < 0.5 ? -1 : 1) * 75;
+    this.vx = customVx !== undefined ? customVx : (this.rng.next() < 0.5 ? -1 : 1) * 75;
     this.speedMultiplier = typeof def.speed === 'number' ? def.speed : 1;
     this.vy = 20 * this.speedMultiplier; // すべての敵が非常に緩やかな速度で徐々に下へ移動
     this.gravity = typeof def.gravity === 'number' ? def.gravity : 0;
@@ -37,7 +38,7 @@ class Enemy {
     this.burstRemaining = 0;
     this.burstTimer = 0;
     this.burstTargetSlot = null;
-    this.hoverY = 160 + Math.random() * 140;
+    this.hoverY = 160 + this.rng.next() * 140;
     this._hasFiredOnce = false;
     this._shotSeq = 0;
     this._counterUseAimed = false;
@@ -526,7 +527,7 @@ class Enemy {
           if (this.bullet_type === 'aimed_laser') {
             const alivePaddles = paddleList.filter((p) => p && p.hp > 0);
             if (alivePaddles.length > 0) {
-              const picked = alivePaddles[Math.floor(Math.random() * alivePaddles.length)];
+              const picked = alivePaddles[Math.floor(this.rng.next() * alivePaddles.length)];
               const dx = picked.x - this.x;
               const dy = picked.y - this.y;
               this.laserAngle = dy > 4 ? Math.atan2(dy, dx) : Math.PI / 2;
@@ -567,7 +568,7 @@ class Enemy {
           this.burstRemaining -= 1;
           this.burstTimer += this.bullet_type === 'aimed_3round'
             ? 0.14
-            : (0.14 + (Math.random() - 0.5) * 0.04);
+            : (0.14 + (this.rng.next() - 0.5) * 0.04);
           if (b && netHooks && netHooks.onBulletsSpawned) {
             netHooks.onBulletsSpawned([b], this);
           }
@@ -596,7 +597,20 @@ class Enemy {
       }
     }
 
-    // self_destruction / connect の敵のみ、敵自体がパドルへの被弾判定を持ち、触れると消滅する
+    // self_destruction / connect / self_explosion の接触・爆発判定
+    if (!this._checkAndApplyBodyHazard(paddleList, effectsManager, onDamagePaddle, netHooks)) {
+      return false;
+    }
+
+    if (this.y - this.currentRadius > HEIGHT + 20) {
+      return false;
+    }
+
+    return true;
+  }
+
+  _checkAndApplyBodyHazard(paddleList, effectsManager, onDamagePaddle, netHooks = null) {
+    const { COLORS, PADDLE } = GAME_CONFIG;
     if (this.bullet_type === 'self_destruction' || this.bullet_type === 'connect') {
       const hitX = this.x;
       const hitHalfW = this.name === 'square' ? this.currentRadius * 0.85 : 0;
@@ -613,17 +627,19 @@ class Enemy {
         const pBottom = p.y + p.height / 2;
 
         if (hitX + hitHalfW >= pLeft && hitX - hitHalfW <= pRight && maxHitY >= pTop && minHitY <= pBottom) {
-          onDamagePaddle(p, this.damage);
-          hitAny = true;
+          if (!onDamagePaddle || onDamagePaddle(p, this.damage, { enemyId: this.id }) !== false) {
+            hitAny = true;
+          }
         }
       }
       if (hitAny) {
-        effectsManager.spawnCircleParticles(this.x, this.y, COLORS.red, 10, 40, 150);
+        if (effectsManager) {
+          effectsManager.spawnCircleParticles(this.x, this.y, COLORS.red, 10, 40, 150);
+        }
         return false; // 消滅
       }
     } else if (this.bullet_type === 'self_explosion') {
       // bomb (self_explosion): パドルに触れるかパドルのY座標まで降下すると爆発し、距離に応じた割合ダメージを与える
-      const { PADDLE } = GAME_CONFIG;
       let shouldExplode = this.y >= PADDLE.Y;
       if (!shouldExplode) {
         const hitHalfW = this.currentRadius * 0.72;
@@ -648,11 +664,6 @@ class Enemy {
         return false; // 爆発して消滅
       }
     }
-
-    if (this.y - this.currentRadius > HEIGHT + 20) {
-      return false;
-    }
-
     return true;
   }
 
@@ -721,7 +732,7 @@ class Enemy {
         const alivePaddles = Array.isArray(paddleList) ? paddleList.filter((p) => p && p.hp > 0) : [];
         let targetPaddle = alivePaddles.find((p) => p.slot === this.aimedFallTargetSlot) || null;
         if (!targetPaddle && alivePaddles.length > 0) {
-          targetPaddle = alivePaddles[Math.floor(Math.random() * alivePaddles.length)];
+          targetPaddle = alivePaddles[Math.floor(this.rng.next() * alivePaddles.length)];
           this.aimedFallTargetSlot = targetPaddle.slot;
           this._aimedFallTargetChanged = true;
         }
@@ -828,7 +839,7 @@ class Enemy {
     }
   }
 
-  updateClient(dt, enemyBullets, paddles = []) {
+  updateClient(dt, enemyBullets, paddles = [], effectsManager = null, onDamagePaddle = null, netHooks = null) {
     const { HEIGHT } = GAME_CONFIG;
     const paddleList = Array.isArray(paddles) ? paddles : (paddles ? [paddles] : []);
     this.stepMovementAndAnimation(dt, paddleList);
@@ -857,10 +868,17 @@ class Enemy {
     if (this.isLaserShooter()) {
       if (this.laserActiveTimer > 0) {
         this.laserBlinkTimer += dt;
+        for (const [slot, cd] of this.laserDamageCooldowns) {
+          const next = cd - dt;
+          if (next <= 1e-6) this.laserDamageCooldowns.delete(slot);
+          else this.laserDamageCooldowns.set(slot, next);
+        }
+        this._checkAndApplyLaserDamage(paddleList, effectsManager, onDamagePaddle);
         this.laserActiveTimer = Math.max(0, this.laserActiveTimer - dt);
         if (this.laserActiveTimer <= 1e-6) {
           this.laserActiveTimer = 0;
           this.laserAimLocked = false;
+          this.laserDamageCooldowns.clear();
         }
       } else if (!this.hiddenByCloud && this.y >= this.currentRadius && this.fire_rate > 0) {
         this.fireTimer -= dt;
@@ -874,7 +892,9 @@ class Enemy {
           this.laserActiveTimer = 0.5;
           this.laserDuration = 0.5;
           this.laserBlinkTimer = 0;
+          this.laserDamageCooldowns.clear();
           this.fireTimer = this.fire_rate;
+          this._checkAndApplyLaserDamage(paddleList, effectsManager, onDamagePaddle);
         }
       }
     } else if (!this.hiddenByCloud && this.localAutoFire && this.isDeterministicShooter()) {
@@ -888,7 +908,11 @@ class Enemy {
       }
     }
 
-    if (this.bullet_type === 'self_explosion' && this.y > GAME_CONFIG.PADDLE.Y) {
+    if (onDamagePaddle) {
+      if (!this._checkAndApplyBodyHazard(paddleList, effectsManager, onDamagePaddle, netHooks)) {
+        return false;
+      }
+    } else if (this.bullet_type === 'self_explosion' && this.y > GAME_CONFIG.PADDLE.Y) {
       this.y = GAME_CONFIG.PADDLE.Y;
     }
 
@@ -896,8 +920,8 @@ class Enemy {
   }
 
   _spawnWobbledDownBullet(enemyBullets) {
-    const a = Math.PI / 2 + (Math.random() - 0.5) * 0.34;
-    const spd = 205 + (Math.random() - 0.5) * 24;
+    const a = Math.PI / 2 + (this.rng.next() - 0.5) * 0.34;
+    const spd = 205 + (this.rng.next() - 0.5) * 24;
     const b = {
       x: this.x,
       y: this.y + this.currentRadius * 0.85,
@@ -918,7 +942,7 @@ class Enemy {
     if (alivePaddles.length === 0) return null;
     let target = alivePaddles.find((p) => p.slot === this.burstTargetSlot) || null;
     if (!target) {
-      target = alivePaddles[Math.floor(Math.random() * alivePaddles.length)];
+      target = alivePaddles[Math.floor(this.rng.next() * alivePaddles.length)];
       this.burstTargetSlot = target.slot;
     }
     const spawnY = this.y + this.currentRadius * 0.85;
@@ -1121,7 +1145,7 @@ class Enemy {
       spawned.push(this._spawnWobbledDownBullet(enemyBullets));
       if (this.burstRemaining <= 0) {
         this.burstRemaining = 2;
-        this.burstTimer = 0.14 + (Math.random() - 0.5) * 0.04;
+        this.burstTimer = 0.14 + (this.rng.next() - 0.5) * 0.04;
       }
     } else if (this.bullet_type === 'aimed_3round') {
       // 揺らぎ無しでプレイヤーを狙う3連続射撃

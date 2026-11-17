@@ -22,6 +22,7 @@ class BigfootBoss {
     this.netKind = 'boss';
     this.id = 'bigfoot';
     this.name = 'bigfoot';
+    this.rng = GameRng.fromSeed(GameRng.mixSeed(GameRng.getStageSeed(), 0x424654));
     this.stageEnemies = Array.isArray(stageData && stageData.enemies)
       ? stageData.enemies.slice()
       : ['triangle', 'pentagon', 'diamond', 'hexagon'];
@@ -445,7 +446,7 @@ class BigfootBoss {
     const { WIDTH } = GAME_CONFIG;
     if (!this.stageEnemies || this.stageEnemies.length === 0) return;
 
-    const count = 2 + Math.floor(Math.random() * 3); // 2〜4体
+    const count = 2 + Math.floor(this.rng.next() * 3); // 2〜4体
     const margin = 64;
     const usableW = WIDTH - margin * 2;
     const sliceW = usableW / count;
@@ -453,17 +454,17 @@ class BigfootBoss {
     // 出現位置の順序をシャッフルし、降りてくるタイミングに揺らぎを持たせる
     const sliceIndices = Array.from({ length: count }, (_, idx) => idx);
     for (let i = sliceIndices.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
+      const j = Math.floor(this.rng.next() * (i + 1));
       [sliceIndices[i], sliceIndices[j]] = [sliceIndices[j], sliceIndices[i]];
     }
 
     let delay = 0;
     for (let i = 0; i < count; i++) {
       const slotIdx = sliceIndices[i];
-      const spawnX = margin + sliceW * slotIdx + (0.2 + Math.random() * 0.6) * sliceW;
-      const typeName = this.stageEnemies[Math.floor(Math.random() * this.stageEnemies.length)];
+      const spawnX = margin + sliceW * slotIdx + (0.2 + this.rng.next() * 0.6) * sliceW;
+      const typeName = this.stageEnemies[Math.floor(this.rng.next() * this.stageEnemies.length)];
       if (i > 0) {
-        delay += 0.35 + Math.random() * 0.65;
+        delay += 0.35 + this.rng.next() * 0.65;
       }
       if (delay <= 0) {
         this.spawnSingleSummonedEnemy(typeName, spawnX, enemies);
@@ -491,7 +492,7 @@ class BigfootBoss {
 
     // 発射ごとに前回と異なる角度オフセットへ変化させる
     const dir = this.lastBarrageAngleOffset >= 0 ? -1 : 1;
-    const angleOffset = dir * (0.09 + Math.random() * 0.11);
+    const angleOffset = dir * (0.09 + this.rng.next() * 0.11);
     this.lastBarrageAngleOffset = angleOffset;
 
     const minAngle = 0.26 + angleOffset;
@@ -895,8 +896,8 @@ class BigfootBoss {
     const { COLORS } = GAME_CONFIG;
     const aliveArms = [this.leftArm, this.rightArm].filter((arm) => arm && arm.hp > 0);
     if (aliveArms.length > 0) {
-      const pickedArm = aliveArms[Math.floor(Math.random() * aliveArms.length)];
-      const hitCircle = pickedArm.circles[Math.floor(Math.random() * pickedArm.circles.length)] || pickedArm.circles[0];
+      const pickedArm = aliveArms[Math.floor(this.rng.next() * aliveArms.length)];
+      const hitCircle = pickedArm.circles[Math.floor(this.rng.next() * pickedArm.circles.length)] || pickedArm.circles[0];
       pickedArm.hitCooldown = 0;
       const applied = this.applyArmDamage(
         pickedArm,
@@ -1162,7 +1163,34 @@ class BigfootBoss {
   /**
    * ゲスト側クライアント補間更新（60fpsでボス本体・頭・両腕と点滅を滑らかに進行させる）
    */
-  updateClient(dt) {
+  _checkArmPunchStrikeHits(arm, paddles, effectsManager, onDamagePaddle) {
+    const { COLORS } = GAME_CONFIG;
+    if (!arm || !onDamagePaddle || !Array.isArray(paddles) || paddles.length === 0) return;
+    for (const p of paddles) {
+      if (!p || p.hp <= 0 || p.invincibleTimer > 0 || this.punchHitSlots.has(p.slot)) continue;
+      const pLeft = p.x - p.currentWidth / 2;
+      const pRight = p.x + p.currentWidth / 2;
+      const pTop = p.y - p.height / 2;
+      const pBottom = p.y + p.height / 2;
+
+      for (const c of arm.circles) {
+        const closestX = ColorUtils.clamp(c.x, pLeft, pRight);
+        const closestY = ColorUtils.clamp(c.y, pTop, pBottom);
+        const dx = c.x - closestX;
+        const dy = c.y - closestY;
+        if (dx * dx + dy * dy <= c.r * c.r) {
+          this.punchHitSlots.add(p.slot);
+          onDamagePaddle(p, 4);
+          if (effectsManager) {
+            effectsManager.spawnCircleParticles(closestX, closestY, COLORS.red, 10, 45, 165);
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  updateClient(dt, paddles = [], effectsManager = null, onDamagePaddle = null) {
     if (this._hasSnapInterp && this._interpFrom && this._interpTo) {
       this._interpElapsed += dt;
       const alpha = this._interpDuration > 0 ? Math.min(1, this._interpElapsed / this._interpDuration) : 1;
@@ -1195,6 +1223,14 @@ class BigfootBoss {
     for (const arm of [this.leftArm, this.rightArm]) {
       if (arm.blinking) {
         arm.blinkTimer = (arm.blinkTimer || 0) + dt;
+      }
+    }
+
+    if (this.phase === 'punch_strike' && onDamagePaddle && Array.isArray(paddles) && paddles.length > 0) {
+      for (const arm of [this.leftArm, this.rightArm]) {
+        if (arm.hp > 0 && arm.circles.some((c) => c.y > 240)) {
+          this._checkArmPunchStrikeHits(arm, paddles, effectsManager, onDamagePaddle);
+        }
       }
     }
 
@@ -1232,8 +1268,12 @@ class BigfootBoss {
       rightCircles
     ] = data;
 
+    const prevPhase = this.phase;
     this.phase = phase || 'cooldown';
     this.phaseTimer = phaseTimer || 0;
+    if (this.phase === 'punch_strike' && prevPhase !== 'punch_strike') {
+      this.punchHitSlots.clear();
+    }
     this.head.hp = headHp;
     this.head.maxHp = headMaxHp;
 
@@ -1297,6 +1337,7 @@ class SnakeBoss {
     this.netKind = 'boss';
     this.id = 'snake';
     this.name = 'snake';
+    this.rng = GameRng.fromSeed(GameRng.mixSeed(GameRng.getStageSeed(), 0x534e4b));
     this.stageEnemies = Array.isArray(stageData && stageData.enemies)
       ? stageData.enemies.slice()
       : ['pickaxe', 'quadiamond', 'club', 'spade'];
@@ -1488,7 +1529,7 @@ class SnakeBoss {
   pickRandomAlivePaddle(paddles) {
     const alive = paddles.filter((p) => p && p.hp > 0);
     if (alive.length === 0) return null;
-    return alive[Math.floor(Math.random() * alive.length)];
+    return alive[Math.floor(this.rng.next() * alive.length)];
   }
 
   resolveTrackedPaddleX(paddles) {
@@ -1538,7 +1579,7 @@ class SnakeBoss {
     // 左・中央・右の3方向をランダムな順番へシャッフル
     const dirs = [Math.PI / 2 + 0.5, Math.PI / 2, Math.PI / 2 - 0.5];
     for (let i = dirs.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
+      const j = Math.floor(this.rng.next() * (i + 1));
       [dirs[i], dirs[j]] = [dirs[j], dirs[i]];
     }
     this.barrageAngles = dirs;
@@ -1564,11 +1605,11 @@ class SnakeBoss {
   initSlitherPath() {
     const { WIDTH, PADDLE } = GAME_CONFIG;
     const dirs = ['right', 'left'];
-    this.slitherDir = dirs[Math.floor(Math.random() * dirs.length)];
+    this.slitherDir = dirs[Math.floor(this.rng.next() * dirs.length)];
 
     const samples = 280;
     const pts = [];
-    const wavePhase = Math.random() * Math.PI * 2;
+    const wavePhase = this.rng.next() * Math.PI * 2;
     let totalArc = 0;
 
     const startX = this.slitherDir === 'left' ? -60 : WIDTH + 60;
@@ -1689,23 +1730,23 @@ class SnakeBoss {
     const { WIDTH } = GAME_CONFIG;
     if (!this.stageEnemies || this.stageEnemies.length === 0) return;
 
-    const count = 2 + Math.floor(Math.random() * 3); // 2〜4体
+    const count = 2 + Math.floor(this.rng.next() * 3); // 2〜4体
     const margin = 64;
     const usableW = WIDTH - margin * 2;
     const sliceW = usableW / count;
     const sliceIndices = Array.from({ length: count }, (_, idx) => idx);
     for (let i = sliceIndices.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
+      const j = Math.floor(this.rng.next() * (i + 1));
       [sliceIndices[i], sliceIndices[j]] = [sliceIndices[j], sliceIndices[i]];
     }
 
     let delay = 0;
     for (let i = 0; i < count; i++) {
       const slotIdx = sliceIndices[i];
-      const spawnX = margin + sliceW * slotIdx + (0.2 + Math.random() * 0.6) * sliceW;
-      const typeName = this.stageEnemies[Math.floor(Math.random() * this.stageEnemies.length)];
+      const spawnX = margin + sliceW * slotIdx + (0.2 + this.rng.next() * 0.6) * sliceW;
+      const typeName = this.stageEnemies[Math.floor(this.rng.next() * this.stageEnemies.length)];
       if (i > 0) {
-        delay += 0.35 + Math.random() * 0.65;
+        delay += 0.35 + this.rng.next() * 0.65;
       }
       if (delay <= 0) {
         this.spawnSingleSummonedEnemy(typeName, spawnX, enemies);
@@ -2043,7 +2084,7 @@ class SnakeBoss {
       this.placeVerticalStack(GAME_CONFIG.WIDTH / 2, -90);
       if (this.phaseTimer >= 3.0) {
         this.attackHitSlots = new Set();
-        if (Math.random() < 0.5) {
+        if (this.rng.next() < 0.5) {
           // 2a: ランダムなプレイヤーの位置へ上から1秒顔を出して急降下
           const target = this.pickRandomAlivePaddle(paddles);
           this.diveX = ColorUtils.clamp(target ? target.x : GAME_CONFIG.WIDTH / 2, 60, GAME_CONFIG.WIDTH - 60);
@@ -2273,7 +2314,7 @@ class SnakeBoss {
       }
     }
     const segIndex = visibleIndices.length > 0
-      ? visibleIndices[Math.floor(Math.random() * visibleIndices.length)]
+      ? visibleIndices[Math.floor(this.rng.next() * visibleIndices.length)]
       : 0;
     this.hitCooldown = 0;
     const applied = this.applyDamageAtSegment(segIndex, COLORS.white, effectsManager, onScore, 0);
@@ -2449,7 +2490,7 @@ class SnakeBoss {
     }
   }
 
-  updateClient(dt) {
+  updateClient(dt, paddles = [], effectsManager = null, onDamagePaddle = null) {
     if (this._hasSnapInterp && this._interpFrom && this._interpTo) {
       this._interpElapsed += dt;
       const alpha = this._interpDuration > 0 ? Math.min(1, this._interpElapsed / this._interpDuration) : 1;
@@ -2480,6 +2521,27 @@ class SnakeBoss {
 
     this.updateAfterimages(dt);
 
+    if (onDamagePaddle && Array.isArray(paddles) && paddles.length > 0 && !this.isDefeated()) {
+      if (this.phase === 'tongue_strike' && this.tongueProgress > 0.05) {
+        const samples = 6;
+        const tongueCircles = [];
+        for (let i = 1; i <= samples; i++) {
+          const s = i / samples;
+          tongueCircles.push({
+            x: this.tongueStartX + (this.tongueTipX - this.tongueStartX) * s,
+            y: this.tongueStartY + (this.tongueTipY - this.tongueStartY) * s,
+            r: 12
+          });
+        }
+        this.damagePaddlesAlongSegmentList(paddles, tongueCircles, 4, onDamagePaddle, effectsManager);
+      } else if (this.phase === 'dive') {
+        this.damagePaddlesAlongSegmentList(paddles, this.segments, 4, onDamagePaddle, effectsManager);
+      } else if (this.phase === 'slither') {
+        this.damagePaddlesAlongSegmentList(paddles, [this.segments[0]], 4, onDamagePaddle, effectsManager);
+        this.damagePaddlesAlongSegmentList(paddles, this.segments.slice(1), 2, onDamagePaddle, effectsManager);
+      }
+    }
+
     if (this.phase === 'defeated' || this.isDefeated()) {
       this.phase = 'defeated';
       this.defeatVibClock = (this.defeatVibClock || 0) + dt;
@@ -2509,8 +2571,15 @@ class SnakeBoss {
       segs
     ] = data;
 
+    const prevPhase = this.phase;
     this.phase = phase || 'cooldown';
     this.phaseTimer = phaseTimer || 0;
+    if (
+      this.phase !== prevPhase &&
+      (this.phase === 'tongue_strike' || this.phase === 'dive' || this.phase === 'slither')
+    ) {
+      this.attackHitSlots = new Set();
+    }
     this.hp = hp;
     this.maxHp = maxHp;
 
@@ -2558,6 +2627,7 @@ class CloudBoss {
     this.netKind = 'boss';
     this.id = 'cloud';
     this.name = (stageData && stageData.name) || 'cloud';
+    this.rng = GameRng.fromSeed(GameRng.mixSeed(GameRng.getStageSeed(), 0x434c44));
     this.stageEnemies = (stageData && Array.isArray(stageData.enemies) && stageData.enemies.length > 0)
       ? stageData.enemies
       : ['arrow', 'wide_arrow', 'sparkle', 'scissors'];
@@ -2608,7 +2678,7 @@ class CloudBoss {
     this.puffIntroInterval = 0.05;
     this.puffScaleDuration = 0.28;
     this.introDuration = (this.basePuffs.length - 1) * this.puffIntroInterval + this.puffScaleDuration;
-    this.introSeed = Math.floor(Math.random() * 65535) || 1;
+    this.introSeed = Math.floor(this.rng.next() * 65535) || 1;
     this.puffIntroRank = this.buildPuffIntroRank(this.introSeed);
     this.introProgress = 1;
     this.introElapsed = this.introDuration;
@@ -2723,7 +2793,7 @@ class CloudBoss {
   setIntroProgress(progress) {
     const u = ColorUtils.clamp(progress, 0, 1);
     if (u === 0 && this.introProgress >= 1) {
-      this.introSeed = (Math.floor(Math.random() * 65535) || 1);
+      this.introSeed = (Math.floor(this.rng.next() * 65535) || 1);
       this.puffIntroRank = this.buildPuffIntroRank(this.introSeed);
     }
     this.introProgress = u;
@@ -2833,14 +2903,14 @@ class CloudBoss {
       // 3レーンの並び順をシャッフルし、各レーン間および画面端との間に必ず48px以上の雨区間を確保して重なりを防ぐ
       const order = [0, 1, 2];
       for (let i = order.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
+        const j = Math.floor(this.rng.next() * (i + 1));
         [order[i], order[j]] = [order[j], order[i]];
       }
       const orderedSpecs = order.map((idx) => laneSpecs[idx]);
       const lanesTotalW = orderedSpecs.reduce((sum, s) => sum + s.halfW * 2, 0);
       const minWall = 48;
       const flexWallTotal = Math.max(0, WIDTH - lanesTotalW - minWall * 4);
-      const wallWeights = Array.from({ length: 4 }, () => 0.35 + Math.random());
+      const wallWeights = Array.from({ length: 4 }, () => 0.35 + this.rng.next());
       const wallWeightSum = wallWeights.reduce((a, b) => a + b, 0) || 1;
       const walls = wallWeights.map((w) => minWall + (w / wallWeightSum) * flexWallTotal);
 
@@ -2858,14 +2928,14 @@ class CloudBoss {
     } else if (actionIdx === 1) {
       // 2. 2秒間レーザー線表示(500ms前に赤くなり始める) -> 真下に赤白の稲妻を同タイミング複数発 (4ダメージ)
       // 100% HP用(第1)・40% HP用(第2)・20% HP用(第3)の3つの安全レーンを確保しつつ高密度に配置する
-      const count = 8 + Math.floor(Math.random() * 2); // 8 ~ 9本
+      const count = 8 + Math.floor(this.rng.next() * 2); // 8 ~ 9本
       const boltHalfW = 11;
-      const gap1 = fullPaddleW + boltHalfW * 2 + 34 + Math.random() * 14;       // 実効 ~178-192px (100% HP)
-      const gap2 = fullPaddleW * 0.4 + boltHalfW * 2 + 24 + Math.random() * 12; // 実効 ~82-94px   (40% HP)
-      const gap3 = fullPaddleW * 0.2 + boltHalfW * 2 + 18 + Math.random() * 10; // 実効 ~47-57px   (20% HP)
+      const gap1 = fullPaddleW + boltHalfW * 2 + 34 + this.rng.next() * 14;       // 実効 ~178-192px (100% HP)
+      const gap2 = fullPaddleW * 0.4 + boltHalfW * 2 + 24 + this.rng.next() * 12; // 実効 ~82-94px   (40% HP)
+      const gap3 = fullPaddleW * 0.2 + boltHalfW * 2 + 18 + this.rng.next() * 10; // 実効 ~47-57px   (20% HP)
 
-      const leftX = 44 + Math.random() * 24;
-      const rightX = WIDTH - (44 + Math.random() * 24);
+      const leftX = 44 + this.rng.next() * 24;
+      const rightX = WIDTH - (44 + this.rng.next() * 24);
       const span = rightX - leftX;
       const gapCount = count - 1;
       const otherCount = gapCount - 3;
@@ -2874,7 +2944,7 @@ class CloudBoss {
       // ギャップのうち3つを第1・第2・第3レーンに割り当て
       const indices = Array.from({ length: gapCount }, (_, idx) => idx);
       for (let i = indices.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
+        const j = Math.floor(this.rng.next() * (i + 1));
         [indices[i], indices[j]] = [indices[j], indices[i]];
       }
       const gapByIdx = new Array(gapCount).fill(0);
@@ -2886,7 +2956,7 @@ class CloudBoss {
       const minOther = 22;
       const maxOther = boltHalfW * 2 + fullPaddleW * 0.4 - 6; // 73px
       const flexTotal = Math.max(0, otherTotal - minOther * otherCount);
-      const rawWeights = Array.from({ length: otherCount }, () => 0.05 + Math.pow(Math.random(), 1.6) * 2.5);
+      const rawWeights = Array.from({ length: otherCount }, () => 0.05 + Math.pow(this.rng.next(), 1.6) * 2.5);
       const weightSum = rawWeights.reduce((a, b) => a + b, 0) || 1;
       const otherGaps = rawWeights.map((w) => minOther + (w / weightSum) * flexTotal);
       let overflow = 0;
@@ -2915,7 +2985,7 @@ class CloudBoss {
       for (let i = 0; i < count; i++) {
         bolts.push({
           x: Math.round(curX),
-          seed: Math.floor(Math.random() * 65535)
+          seed: Math.floor(this.rng.next() * 65535)
         });
         if (i < gapCount) {
           curX += gapByIdx[i];
@@ -2976,24 +3046,24 @@ class CloudBoss {
     const totalSpan = allowed.reduce((sum, [a, b]) => sum + Math.max(0, b - a), 0) || 1;
 
     const pickX = () => {
-      let r = Math.random() * totalSpan;
+      let r = this.rng.next() * totalSpan;
       for (const [a, b] of allowed) {
         const len = Math.max(0, b - a);
         if (r <= len) return a + r;
         r -= len;
       }
-      return -4 + Math.random() * (WIDTH + 8);
+      return -4 + this.rng.next() * (WIDTH + 8);
     };
 
-    const rBurst = Math.random();
+    const rBurst = this.rng.next();
     const burst = rBurst < 0.2 ? 3 : (rBurst < 0.55 ? 2 : 1);
     const spawned = [];
     for (let k = 0; k < burst; k++) {
       const bx = pickX();
       const clampedLookupX = ColorUtils.clamp(bx, 0, WIDTH);
-      const by = Math.max(40, this.getCloudBottomAt(clampedLookupX) - 8) - Math.random() * 14;
+      const by = Math.max(40, this.getCloudBottomAt(clampedLookupX) - 8) - this.rng.next() * 14;
       const angle = Math.PI / 2;
-      const speed = 175 + Math.random() * 115;
+      const speed = 175 + this.rng.next() * 115;
       const b = {
         x: bx,
         y: by,
@@ -3016,23 +3086,23 @@ class CloudBoss {
     const { WIDTH } = GAME_CONFIG;
     if (!this.stageEnemies || this.stageEnemies.length === 0) return;
 
-    const count = 3 + Math.floor(Math.random() * 3); // 3 ~ 5体
+    const count = 3 + Math.floor(this.rng.next() * 3); // 3 ~ 5体
     const margin = 60;
     const usableW = WIDTH - margin * 2;
     const sliceW = usableW / count;
     const indices = Array.from({ length: count }, (_, idx) => idx);
     for (let i = indices.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
+      const j = Math.floor(this.rng.next() * (i + 1));
       [indices[i], indices[j]] = [indices[j], indices[i]];
     }
 
     let delay = 0;
     for (let i = 0; i < count; i++) {
       const slotIdx = indices[i];
-      const spawnX = margin + sliceW * slotIdx + (0.2 + Math.random() * 0.6) * sliceW;
-      const typeName = this.stageEnemies[Math.floor(Math.random() * this.stageEnemies.length)];
+      const spawnX = margin + sliceW * slotIdx + (0.2 + this.rng.next() * 0.6) * sliceW;
+      const typeName = this.stageEnemies[Math.floor(this.rng.next() * this.stageEnemies.length)];
       if (i > 0) {
-        delay += 0.35 + Math.random() * 0.65;
+        delay += 0.35 + this.rng.next() * 0.65;
       }
       if (delay <= 0) {
         this.spawnSingleSummonedEnemy(typeName, spawnX, enemies);
@@ -3057,24 +3127,24 @@ class CloudBoss {
 
   spawnDroppedBoxesAndItems(enemies, items, onSpawnItem) {
     const { WIDTH } = GAME_CONFIG;
-    const count = 4 + Math.floor(Math.random() * 3); // 4 ~ 6個
+    const count = 4 + Math.floor(this.rng.next() * 3); // 4 ~ 6個
     const margin = 48;
     const usableW = WIDTH - margin * 2;
     const sliceW = usableW / count;
     const indices = Array.from({ length: count }, (_, idx) => idx);
     for (let i = indices.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
+      const j = Math.floor(this.rng.next() * (i + 1));
       [indices[i], indices[j]] = [indices[j], indices[i]];
     }
 
     let delay = 0;
     for (let i = 0; i < count; i++) {
       const slotIdx = indices[i];
-      const spawnX = margin + sliceW * slotIdx + (0.18 + Math.random() * 0.64) * sliceW;
+      const spawnX = margin + sliceW * slotIdx + (0.18 + this.rng.next() * 0.64) * sliceW;
       // 最初の1つは必ずダメージ箱にし、残りは一定確率でアイテムが代わりに降り注ぐ
-      const isItem = i > 0 && Math.random() < 0.28;
+      const isItem = i > 0 && this.rng.next() < 0.28;
       if (i > 0) {
-        delay += 0.12 + Math.random() * 0.16;
+        delay += 0.12 + this.rng.next() * 0.16;
       }
       if (delay <= 0) {
         this.spawnSingleBoxOrItem(spawnX, isItem, enemies, items, onSpawnItem);
@@ -3104,8 +3174,8 @@ class CloudBoss {
       damage: 4,
       fire_rate: 0
     };
-    const vx = (Math.random() - 0.5) * 220;
-    const vy = -45 + Math.random() * 85;
+    const vx = (this.rng.next() - 0.5) * 220;
+    const vy = -45 + this.rng.next() * 85;
     const box = new Enemy(def, spawnX, undefined, vx);
     box.x = spawnX;
     box.y = spawnY;
@@ -3267,7 +3337,7 @@ class CloudBoss {
     } else if (this.phase === 'rain_attack') {
       this.rainSpawnTimer -= dt;
       while (this.rainSpawnTimer <= 0 && this.phaseTimer < 1.85) {
-        this.rainSpawnTimer += 0.04 + Math.random() * 0.08;
+        this.rainSpawnTimer += 0.04 + this.rng.next() * 0.08;
         this.spawnRainBullets(enemyBullets, onBarrageSpawn);
       }
       if (this.phaseTimer >= 1.95) {
@@ -3336,7 +3406,7 @@ class CloudBoss {
     }
   }
 
-  updateClient(dt) {
+  updateClient(dt, paddles = [], effectsManager = null, onDamagePaddle = null) {
     this.idleClock += dt;
     this.phaseTimer += dt;
 
@@ -3363,6 +3433,10 @@ class CloudBoss {
 
     const tb = this.getTrembleOffset();
     this.syncPuffPositions(tb.x, tb.y);
+
+    if (this.phase === 'lightning_strike' && onDamagePaddle && Array.isArray(paddles) && paddles.length > 0 && !this.isDefeated()) {
+      this.applyLightningStrikeHits(paddles, effectsManager, onDamagePaddle);
+    }
   }
 
   applyDamageAtPuff(puffIndex, pulseColor, effectsManager, onScore, cooldown = 0.08) {
@@ -3417,7 +3491,7 @@ class CloudBoss {
   applyCrackDamage(effectsManager, onScore) {
     if (!this.canTakeCrackDamage()) return null;
     const { COLORS } = GAME_CONFIG;
-    const idx = Math.floor(Math.random() * this.puffs.length);
+    const idx = Math.floor(this.rng.next() * this.puffs.length);
     this.hitCooldown = 0;
     const applied = this.applyDamageAtPuff(idx, COLORS.white, effectsManager, onScore, 0);
     const puff = this.puffs[idx] || this.puffs[0];
@@ -3665,8 +3739,12 @@ class CloudBoss {
       bolts
     ] = data;
 
+    const prevPhase = this.phase;
     this.phase = phase || 'cooldown';
     this.phaseTimer = phaseTimer || 0;
+    if (this.phase === 'lightning_strike' && prevPhase !== 'lightning_strike') {
+      this.attackHitSlots = new Set();
+    }
     this.hp = hp;
     this.maxHp = maxHp;
     this.lightningBolts = Array.isArray(bolts)
@@ -3736,6 +3814,7 @@ class DragonBoss {
     this.netKind = 'boss';
     this.id = 'dragon';
     this.name = (stageData && stageData.name) || 'dragon';
+    this.rng = GameRng.fromSeed(GameRng.mixSeed(GameRng.getStageSeed(), 0x445247));
     this.stageEnemies = (stageData && Array.isArray(stageData.enemies) && stageData.enemies.length > 0)
       ? stageData.enemies
       : ['prism', 'crescent', 'circle', 'bomb'];
@@ -3991,7 +4070,7 @@ class DragonBoss {
   pickRandomAlivePaddle(paddles) {
     const alive = paddles.filter((p) => p && p.hp > 0);
     if (alive.length === 0) return null;
-    return alive[Math.floor(Math.random() * alive.length)];
+    return alive[Math.floor(this.rng.next() * alive.length)];
   }
 
   enterCooldown(duration = this.attackCooldown) {
@@ -4050,11 +4129,11 @@ class DragonBoss {
   fireOffscreenSpadeBullet(laneIndex, enemyBullets, onBarrageSpawn) {
     const { WIDTH } = GAME_CONFIG;
     const laneX = this.spadeLanes[laneIndex % Math.max(1, this.spadeLanes.length)] || (WIDTH / 2);
-    const spawnX = ColorUtils.clamp(laneX + (Math.random() - 0.5) * 44, 52, WIDTH - 52);
+    const spawnX = ColorUtils.clamp(laneX + (this.rng.next() - 0.5) * 44, 52, WIDTH - 52);
     const spawnY = -14;
-    const angle = Math.PI / 2 + (Math.random() - 0.5) * 0.34;
+    const angle = Math.PI / 2 + (this.rng.next() - 0.5) * 0.34;
     const speed = 235;
-    const explodeY = 365 + Math.random() * 175;
+    const explodeY = 365 + this.rng.next() * 175;
     const bullet = {
       x: spawnX,
       y: spawnY,
@@ -4083,19 +4162,19 @@ class DragonBoss {
     const target = this.pickRandomAlivePaddle(paddles);
     const tx = target ? target.x : WIDTH / 2;
     const ty = target ? target.y : PADDLE.Y;
-    const count = 10 + Math.floor(Math.random() * 11); // 10 ~ 20本
+    const count = 10 + Math.floor(this.rng.next() * 11); // 10 ~ 20本
     const riseOffset = 52;
     const speed = 920;
     const spawned = [];
 
     for (let i = 0; i < count; i++) {
       // -30度 〜 +30度 のランダムな角度で目標点を通る線分を決定
-      const theta = (Math.random() - 0.5) * (Math.PI / 3);
+      const theta = (this.rng.next() - 0.5) * (Math.PI / 3);
       const dirAngle = Math.PI / 2 + theta;
       const ux = Math.cos(dirAngle);
       const uy = Math.sin(dirAngle);
 
-      const dist = 560 + Math.random() * 90;
+      const dist = 560 + this.rng.next() * 90;
 
       const holdX = tx - ux * dist;
       const holdY = ty - uy * dist;
@@ -4173,20 +4252,20 @@ class DragonBoss {
    */
   queueEnemySummons(enemies) {
     const { WIDTH } = GAME_CONFIG;
-    const count = 4 + Math.floor(Math.random() * 3); // 4 ~ 6体
+    const count = 4 + Math.floor(this.rng.next() * 3); // 4 ~ 6体
     const margin = 52;
     const usableW = WIDTH - margin * 2;
     const sliceW = usableW / count;
     const indices = Array.from({ length: count }, (_, idx) => idx);
     for (let i = indices.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
+      const j = Math.floor(this.rng.next() * (i + 1));
       [indices[i], indices[j]] = [indices[j], indices[i]];
     }
 
     for (let i = 0; i < count; i++) {
       const slotIdx = indices[i];
-      const spawnX = margin + sliceW * slotIdx + (0.2 + Math.random() * 0.6) * sliceW;
-      const typeName = this.stageEnemies[Math.floor(Math.random() * this.stageEnemies.length)];
+      const spawnX = margin + sliceW * slotIdx + (0.2 + this.rng.next() * 0.6) * sliceW;
+      const typeName = this.stageEnemies[Math.floor(this.rng.next() * this.stageEnemies.length)];
       if (i < 2) {
         this.spawnSingleSummonedEnemy(typeName, spawnX, enemies);
       } else {
@@ -4536,7 +4615,7 @@ class DragonBoss {
     this.syncBodyCircles();
   }
 
-  updateClient(dt) {
+  updateClient(dt, paddles = [], effectsManager = null, onDamagePaddle = null) {
     this.hitCooldown = Math.max(0, this.hitCooldown - dt);
     this.phaseTimer += dt;
     this.updateAfterimages(dt, this.phase === 'charge_rush_down' || this.phase === 'charge_rush_up');
@@ -4571,6 +4650,16 @@ class DragonBoss {
     }
 
     this.syncBodyCircles();
+
+    if (
+      (this.phase === 'charge_rush_down' || this.phase === 'charge_rush_up') &&
+      onDamagePaddle &&
+      Array.isArray(paddles) &&
+      paddles.length > 0 &&
+      !this.isDefeated()
+    ) {
+      this.checkChargePaddleCollisions(paddles, onDamagePaddle, effectsManager);
+    }
   }
 
   applyDamageAtPoint(px, py, radius, targetCircle, pulseColor, effectsManager, onScore, cooldown = 0.08) {
@@ -4655,7 +4744,7 @@ class DragonBoss {
       }
     }
     if (visible.length === 0) return null;
-    const idx = visible[Math.floor(Math.random() * visible.length)];
+    const idx = visible[Math.floor(this.rng.next() * visible.length)];
     this.hitCooldown = 0;
     const applied = this.applyDamageAtCircle(idx, COLORS.white, effectsManager, onScore, 0);
     const circle = this.hitCircles[idx];
@@ -4897,8 +4986,15 @@ class DragonBoss {
     ] = data;
 
     const wasDefeated = this.isDefeated();
+    const prevPhase = this.phase;
     this.phase = phase || 'cooldown';
     this.phaseTimer = phaseTimer || 0;
+    if (
+      this.phase !== prevPhase &&
+      (this.phase === 'charge_rush_down' || this.phase === 'charge_rush_up')
+    ) {
+      this.chargeHitSlots = new Set();
+    }
     this.hp = hp;
     this.maxHp = maxHp;
     this.blinking = Boolean(blinking);

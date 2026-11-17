@@ -35,6 +35,7 @@
       <div id="lobby-hint" class="hidden" aria-live="polite"></div>
     </div>
     <div id="room-controls">
+      <span id="room-code-display" class="hidden" aria-label="Room code"></span>
       <button id="copy-link-button" type="button" aria-label="Copy invite link" title="Copy invite link">
         <svg class="icon-link" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor"
           stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -43,9 +44,8 @@
         </svg>
         <svg class="icon-copy" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor"
           stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M5 17H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h7l4 4v1" />
-          <path d="M15 7H9a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V12z" />
-          <polyline points="15 7 15 12 21 12" />
+          <rect x="7.5" y="2.5" width="12.5" height="15.5" rx="2.2" />
+          <path d="M16.5 21.5H6a2 2 0 0 1-2-2V6" />
         </svg>
         <svg class="icon-check" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor"
           stroke-width="2.4" stroke-linecap="butt" stroke-linejoin="miter" aria-hidden="true">
@@ -68,8 +68,8 @@
           </svg>
         </button>
       </div>
-      <div id="room-status" aria-live="polite"></div>
     </div>
+    <div id="room-status" aria-live="polite"></div>
     <div id="skill-bar" class="hidden" aria-label="Skills"></div>
     <div id="skill-unlock-layer" aria-hidden="true"></div>
   </div>

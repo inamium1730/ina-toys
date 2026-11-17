@@ -8,7 +8,7 @@ class Ball {
     this.netKind = 'ball';
     this.id = customId !== undefined ? customId : Ball.nextId;
 
-    const angle = -Math.PI / 2 + (Math.random() * 0.46 - 0.23);
+    const angle = -Math.PI / 2 + (GameRng.next() * 0.46 - 0.23);
     const speed = BALL.BASE_SPEED;
 
     this.x = x !== undefined ? x : WIDTH / 2;

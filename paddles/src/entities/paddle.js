@@ -454,7 +454,7 @@ class PurplePaddle {
     this.width = 0; // 初回出現時も滑らかにイージングして伸びる
     this.targetWidth = PURPLE_PADDLE.UNIT_WIDTH;
     this.height = PURPLE_PADDLE.HEIGHT;
-    this.dir = Math.random() < 0.5 ? -1 : 1;
+    this.dir = GameRng.next() < 0.5 ? -1 : 1;
     this.clampPosition();
   }
 

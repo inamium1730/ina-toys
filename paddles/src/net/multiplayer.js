@@ -1329,6 +1329,7 @@ class MultiplayerManager {
     this.players = [this.makeLocalPlayerEntry(0, true)];
     this.assignedSlot = 0;
     this.roomOwnerPeerId = null;
+    this.roomSeed = MultiplayerManager.generateSeed();
 
     // 共通ルームクロック & 自身のネットワーク品質統計
     this.roomEpochPerfMs = MultiplayerManager.nowPerf();
@@ -1368,6 +1369,7 @@ class MultiplayerManager {
     this.lastLobbyHandoffAt = 0;
     this.lobbyHandoffInProgress = false;
     this.lobbyHandoffTimer = null;
+    this.pendingLobbyHandoffArgs = null;
     this.handoffSilent = false;
 
     // Signaling transports
@@ -1475,6 +1477,11 @@ class MultiplayerManager {
     return code;
   }
 
+  static generateSeed() {
+    const s = ((Math.random() * 0xffffffff) >>> 0);
+    return s === 0 ? 0x6d2b79f5 : s;
+  }
+
   static getMaxHpForCount(count) {
     const table = GAME_CONFIG.MULTIPLAYER.HP_BY_PLAYER_COUNT;
     const clamped = Math.max(1, Math.min(GAME_CONFIG.MULTIPLAYER.MAX_PLAYERS, count || 1));
@@ -1556,12 +1563,14 @@ class MultiplayerManager {
       localPlayer.ready = this.localReady;
     }
     if (this.mode === 'host') {
-      this.rebuildHostPlayersList();
-      this.broadcastCtrl({
-        type: 'room_state',
-        players: this.serializePlayers(),
-        mo: this.migrationOrder
-      });
+      if (!this.lobbyHandoffInProgress) {
+        this.rebuildHostPlayersList();
+        this.broadcastCtrl({
+          type: 'room_state',
+          players: this.serializePlayers(),
+          mo: this.migrationOrder
+        });
+      }
       this.notifyRoomChange();
     } else if (this.mode === 'guest') {
       this.sendToHostCtrl({ type: 'set_ready', ready: this.localReady });
@@ -1579,6 +1588,7 @@ class MultiplayerManager {
     this.isInGame = false;
     this.localReady = false;
     this.roomCode = MultiplayerManager.generateRoomCode();
+    this.roomSeed = MultiplayerManager.generateSeed();
     this.assignedSlot = 0;
     this.roomOwnerPeerId = this.localPeerId;
     this.roomEpochPerfMs = MultiplayerManager.nowPerf();
@@ -1819,12 +1829,13 @@ class MultiplayerManager {
     this.clearMigrationTimers();
     this.migratingExpectedSlots.clear();
     this.migratingGraceUntil = 0;
-    this.lobbyHandoffInProgress = false;
-    this.handoffSilent = false;
     if (this.lobbyHandoffTimer) {
       clearTimeout(this.lobbyHandoffTimer);
       this.lobbyHandoffTimer = null;
     }
+    this.pendingLobbyHandoffArgs = null;
+    this.lobbyHandoffInProgress = false;
+    this.handoffSilent = false;
 
     if (this.joinRetryTimer) {
       clearInterval(this.joinRetryTimer);
@@ -2259,6 +2270,23 @@ class MultiplayerManager {
       }
     }
 
+    if (
+      this.mode === 'host' &&
+      this.lobbyHandoffInProgress &&
+      !this.isInGame &&
+      this.pendingLobbyHandoffArgs &&
+      env.from === this.pendingLobbyHandoffArgs.newHostPeerId &&
+      (env.type === 'webrtc_offer' || env.type === 'host_migrate_announce' || env.type === 'host_alive')
+    ) {
+      const args = this.pendingLobbyHandoffArgs;
+      this.pendingLobbyHandoffArgs = null;
+      if (this.lobbyHandoffTimer) {
+        clearTimeout(this.lobbyHandoffTimer);
+        this.lobbyHandoffTimer = null;
+      }
+      this.demoteToGuestForLobbyHandoff(args.newHostPeerId, args.ownerPeerId, args.roster, args.survOrder);
+    }
+
     if (this.mode === 'host') {
       this.handleHostSignal(env);
     } else if (this.mode === 'guest') {
@@ -2318,6 +2346,15 @@ class MultiplayerManager {
       }
 
       if (existing) {
+        if (!this.isInGame && existing.connected) {
+          this.migratingExpectedSlots.set(from, {
+            peerId: existing.peerId,
+            slot: existing.slot,
+            nickname: existing.nickname,
+            ready: !!existing.ready
+          });
+          this.migratingGraceUntil = Math.max(this.migratingGraceUntil, Date.now() + 8000);
+        }
         this.removePeer(from);
       }
 
@@ -2511,6 +2548,14 @@ class MultiplayerManager {
     }
   }
 
+  isLobbyHandoffGraceActive() {
+    return !!(
+      this.lobbyHandoffInProgress ||
+      this.migrating ||
+      (this.migratingExpectedSlots && this.migratingExpectedSlots.size > 0 && Date.now() <= this.migratingGraceUntil)
+    );
+  }
+
   initiateLobbyHostHandoff(newHostPeer) {
     if (this.mode !== 'host' || this.isInGame || this.lobbyHandoffInProgress || !newHostPeer) return;
     this.lobbyHandoffInProgress = true;
@@ -2527,6 +2572,7 @@ class MultiplayerManager {
       oldHostPeerId: this.localPeerId,
       newHostPeerId: newHostPeer.peerId,
       ownerPeerId,
+      seed: this.roomSeed,
       serverTimeMs: this.getServerTimeMs(),
       players: roster,
       mo: survOrder
@@ -2535,8 +2581,15 @@ class MultiplayerManager {
     this.broadcastCtrl(payload);
     this.sendSignal('lobby_handoff', null, payload);
 
+    this.pendingLobbyHandoffArgs = {
+      newHostPeerId: newHostPeer.peerId,
+      ownerPeerId,
+      roster,
+      survOrder
+    };
     this.lobbyHandoffTimer = setTimeout(() => {
       this.lobbyHandoffTimer = null;
+      this.pendingLobbyHandoffArgs = null;
       if (this.mode === 'host' && !this.isInGame) {
         this.demoteToGuestForLobbyHandoff(newHostPeer.peerId, ownerPeerId, roster, survOrder);
       }
@@ -2600,8 +2653,16 @@ class MultiplayerManager {
   createOfferForGuest(guestPeerId, joinPayload) {
     const pc = new RTCPeerConnection(MultiplayerManager.RTC_CONFIG);
     const connEpoch = this.connEpochCounter++;
-    const expectedMigrating = joinPayload.isMigration ? this.migratingExpectedSlots.get(guestPeerId) : null;
+    const expectedMigrating = (joinPayload.isMigration || this.migratingExpectedSlots.has(guestPeerId))
+      ? this.migratingExpectedSlots.get(guestPeerId)
+      : null;
     const slot = this.getNextFreeSlot(expectedMigrating ? expectedMigrating.slot : joinPayload.prevSlot);
+
+    const resolvedReady = this.isInGame
+      ? false
+      : (joinPayload.ready !== undefined
+        ? !!joinPayload.ready
+        : !!(expectedMigrating && expectedMigrating.ready));
 
     const peer = {
       peerId: guestPeerId,
@@ -2609,7 +2670,7 @@ class MultiplayerManager {
       sessionToken: joinPayload.sessionToken || '',
       connEpoch,
       nickname: String(joinPayload.nickname || '').trim().slice(0, 12),
-      ready: this.isInGame ? false : !!joinPayload.ready,
+      ready: resolvedReady,
       rttMs: 150,
       minRttMs: Infinity,
       jitterMs: 0,
@@ -2664,6 +2725,7 @@ class MultiplayerManager {
         assignedSlot: peer.slot,
         inGame: this.isInGame,
         ownerPeerId: this.roomOwnerPeerId || this.localPeerId,
+        seed: this.roomSeed,
         serverTimeMs: this.getServerTimeMs(),
         players: this.serializePlayers(),
         mo: this.migrationOrder
@@ -2787,7 +2849,7 @@ class MultiplayerManager {
     if (!msg || !msg.type) return;
     if (msg.type === 'hello') {
       peer.nickname = String(msg.nickname || '').trim().slice(0, 12);
-      peer.ready = this.isInGame ? false : !!msg.ready;
+      peer.ready = this.isInGame ? false : (msg.ready !== undefined ? !!msg.ready : !!peer.ready);
       this.rebuildHostPlayersList();
       this.broadcastCtrl({
         type: 'room_state',
@@ -2826,6 +2888,10 @@ class MultiplayerManager {
       if (this.isInGame && this.callbacks.onUseSkillRequest) {
         this.callbacks.onUseSkillRequest(peer, msg.skillKey);
       }
+    } else if (msg.type === 'client_hit') {
+      if (this.isInGame && this.callbacks.onClientHit) {
+        this.callbacks.onClientHit(peer, msg);
+      }
     } else if (msg.type === 'bye') {
       this.removePeer(peer.peerId);
     }
@@ -2839,7 +2905,8 @@ class MultiplayerManager {
     this.remoteInputs.delete(peer.slot);
     this.closePeerResources(peer);
 
-    if (this.mode === 'host' && wasConnected) {
+    if (this.mode === 'host' && wasConnected && !this.lobbyHandoffInProgress) {
+      const stillExpected = !this.isInGame && this.migratingExpectedSlots.has(guestPeerId);
       this.rebuildHostPlayersList();
       this.broadcastCtrl({
         type: 'room_state',
@@ -2848,7 +2915,7 @@ class MultiplayerManager {
         mo: this.migrationOrder
       });
       this.notifyRoomChange();
-      if (this.callbacks.onPeerLeft) {
+      if (this.callbacks.onPeerLeft && !stillExpected) {
         this.callbacks.onPeerLeft(peer.slot);
       }
     }
@@ -3174,6 +3241,9 @@ class MultiplayerManager {
       if (msg.ownerPeerId) {
         this.roomOwnerPeerId = msg.ownerPeerId;
       }
+      if (msg.seed) {
+        this.roomSeed = msg.seed;
+      }
       if (msg.serverTimeMs !== undefined) {
         this.updateGuestClockSample(msg.serverTimeMs, null);
       }
@@ -3181,6 +3251,12 @@ class MultiplayerManager {
         this.migrationOrder = msg.mo;
       }
       this.applySerializedPlayers(msg.players || []);
+      if (!this.isInGame) {
+        const syncedSelf = (msg.players || []).find((p) => p.peerId === this.localPeerId || p.slot === this.assignedSlot);
+        if (syncedSelf && !!syncedSelf.ready !== !!this.localReady) {
+          this.sendToHostCtrl({ type: 'set_ready', ready: !!this.localReady });
+        }
+      }
       this.notifyRoomChange();
     } else if (msg.type === 'room_state') {
       if (msg.ownerPeerId) {
@@ -3211,6 +3287,9 @@ class MultiplayerManager {
     if (this.mode === 'host') return;
     if (msg.ownerPeerId) {
       this.roomOwnerPeerId = msg.ownerPeerId;
+    }
+    if (msg.seed) {
+      this.roomSeed = msg.seed;
     }
     if (msg.serverTimeMs !== undefined) {
       this.updateGuestClockSample(msg.serverTimeMs, null);
@@ -3265,6 +3344,10 @@ class MultiplayerManager {
       this.migrationOrder = survOrder;
     }
     this.applySerializedPlayers(roster);
+    const localPlayer = this.players.find((p) => p.isLocal || p.peerId === this.localPeerId);
+    if (localPlayer && !this.isInGame) {
+      localPlayer.ready = !!this.localReady;
+    }
 
     if (this.mqttClients.length === 0 && !this.bc && this.roomCode) {
       this.openSignaling(this.roomCode);
@@ -3288,6 +3371,7 @@ class MultiplayerManager {
     this.joinDeadlineAt = 0;
     this.joinSessionToken = MultiplayerManager.randomId(8);
     this.hostPeerId = msg.newHostPeerId;
+    this.migrating = false;
     this.lobbyHandoffInProgress = true;
     this.handoffSilent = true;
     this.reconnectingFromMigration = true;
@@ -3298,6 +3382,10 @@ class MultiplayerManager {
     }
     if (Array.isArray(msg.players)) {
       this.applySerializedPlayers(msg.players);
+      const localPlayer = this.players.find((p) => p.isLocal || p.peerId === this.localPeerId);
+      if (localPlayer && !this.isInGame) {
+        localPlayer.ready = !!this.localReady;
+      }
     }
     if (this.mqttClients.length === 0 && !this.bc && this.roomCode) {
       this.openSignaling(this.roomCode);
@@ -3321,6 +3409,7 @@ class MultiplayerManager {
     this.clearMigrationTimers();
     this.closeHostPeerOnly();
     this.hostPeerId = null;
+    this.migrating = false;
     this.reconnectingFromMigration = false;
     this.lobbyHandoffInProgress = false;
     this.handoffSilent = false;
@@ -3393,10 +3482,15 @@ class MultiplayerManager {
   }
 
   applySerializedPlayers(list) {
-    this.players = list.map((p) => ({
-      ...p,
-      isLocal: p.peerId === this.localPeerId || p.slot === this.assignedSlot
-    }));
+    const keepLocalReady = !this.isInGame && (this.lobbyHandoffInProgress || this.handoffSilent || this.reconnectingFromMigration);
+    this.players = list.map((p) => {
+      const isLocal = p.peerId === this.localPeerId || p.slot === this.assignedSlot;
+      return {
+        ...p,
+        isLocal,
+        ready: isLocal && keepLocalReady ? !!this.localReady : !!p.ready
+      };
+    });
   }
 
   resetGuestToSolo(statusDetail = '') {
@@ -3560,6 +3654,7 @@ class MultiplayerManager {
     this.closeHostPeerOnly();
     this.joinDeadlineAt = 0;
     this.hostPeerId = newHostPeerId;
+    this.migrating = false;
     this.reconnectingFromMigration = true;
     this.lobbyHandoffInProgress = false;
     this.connectionStatus = 'connecting';
