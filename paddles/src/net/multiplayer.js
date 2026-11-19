@@ -367,6 +367,7 @@ class NetProto {
       w.ms16(p[13]);            // respawnTimer
       w.u8(p[14] || 0);         // respawnPenalty
       w.ms16(p[15] || 0);       // guardTimer
+      w.ms16(p[16] || 0);       // heartRegenTimer
     }
 
     if (s.pp) {
@@ -516,7 +517,8 @@ class NetProto {
       const respawnTimer = r.ms16();
       const respawnPenalty = r.u8();
       const guardTimer = r.ms16();
-      ps[i] = [slot, x, hp, maxHp, cw, effClock, cyan, yellow, green, null, contested, sinceDmg, invinc, ackSeq, respawnTimer, respawnPenalty, guardTimer];
+      const heartRegenTimer = r.ms16();
+      ps[i] = [slot, x, hp, maxHp, cw, effClock, cyan, yellow, green, null, contested, sinceDmg, invinc, ackSeq, respawnTimer, respawnPenalty, guardTimer, heartRegenTimer];
     }
 
     let pp = null;
@@ -1291,7 +1293,7 @@ NetProto.BULLET_TYPES = [
   'laser', 'aimed_laser', 'aimed_3round',
   'counter', 'slice', 'crescent', 'self_explosion'
 ];
-NetProto.ITEM_TYPES = ['cyan_star', 'yellow_star', 'green_star', 'blue_circle', 'pink_heart', 'purple_square'];
+NetProto.ITEM_TYPES = ['cyan_star', 'yellow_star', 'green_star', 'blue_star', 'blue_circle', 'pink_heart', 'purple_square'];
 NetProto.FX_TYPES = ['fx_pulse', 'fx_particles', 'fx_regen', 'fx_shatter', 'paddle_hit', 'fx_shield_shatter'];
 NetProto.TARGET_KINDS = ['none', 'paddle', 'ball', 'enemy', 'item', 'purple', 'boss_head', 'boss_circle'];
 NetProto.PULSE_KINDS = ['circle', 'paddle', 'block', 'enemy', 'item', 'purple_paddle', 'boss_head', 'boss_circle', 'rect', 'polygon', 'crack'];
@@ -1300,11 +1302,11 @@ NetProto.SUB_TYPES = [
   'triangle', 'square', 'diamond', 'pentagon', 'hexagon', 'club', 'spade', 'quadiamond', 'pickaxe',
   'arrow', 'sparkle', 'wide_arrow', 'scissors',
   'prism', 'circle', 'semicircle', 'crescent', 'bomb',
-  'cyan_star', 'yellow_star', 'green_star', 'blue_circle', 'pink_heart', 'purple_square'
+  'cyan_star', 'yellow_star', 'green_star', 'blue_star', 'blue_circle', 'pink_heart', 'purple_square'
 ];
 NetProto.COLORS = [
   '#00ffff', '#ffff00', '#00ff00', '#ffffff', '#ff3b3b', '#ff5555', '#aa44ff',
-  '#ffd82b', '#d8d8d8', '#a8a8a8',
+  '#ffd82b', '#d8d8d8', '#a8a8a8', '#1e6fff', '#ff66b2',
   'rgba(255, 255, 255, 0.9)', 'rgba(0, 255, 255, 0.85)', 'rgba(255, 255, 0, 0.85)', 'rgba(0, 255, 0, 0.85)'
 ];
 
@@ -1314,8 +1316,13 @@ NetProto.COLORS = [
  * シグナリングは BroadcastChannel と公開 MQTT-over-WSS ブローカーを併用し、専用サーバー不要で動作する
  */
 class MultiplayerManager {
+  static getGameVersion() {
+    return String((typeof GAME_CONFIG !== 'undefined' && GAME_CONFIG && GAME_CONFIG.VERSION) || '1.1.0');
+  }
+
   constructor(callbacks = {}) {
     this.callbacks = callbacks;
+    this.gameVersion = MultiplayerManager.getGameVersion();
     this.localPeerId = 'p' + MultiplayerManager.randomId(10);
     this.localNickname = '';
     this.localReady = false;
@@ -1907,9 +1914,10 @@ class MultiplayerManager {
     this.closeSignaling();
     this.seenSigIds.clear();
 
+    const ver = this.gameVersion || MultiplayerManager.getGameVersion();
     if (typeof BroadcastChannel !== 'undefined') {
       try {
-        this.bc = new BroadcastChannel(`paddles_sig_${roomCode}`);
+        this.bc = new BroadcastChannel(`paddles_sig_${ver}_${roomCode}`);
         this.bc.onmessage = (ev) => {
           if (ev && ev.data) {
             this.handleSignalEnvelope(ev.data);
@@ -1920,7 +1928,7 @@ class MultiplayerManager {
       }
     }
 
-    const topic = `paddles-game/v1/room/${roomCode}`;
+    const topic = `paddles-game/${encodeURIComponent(ver)}/room/${roomCode}`;
     const brokers = [
       'wss://broker.emqx.io:8084/mqtt',
       'wss://broker.hivemq.com:8884/mqtt'
@@ -2212,6 +2220,7 @@ class MultiplayerManager {
     if (!this.roomCode) return;
     const env = {
       id: `${this.localPeerId}_${Date.now()}_${MultiplayerManager.randomId(5)}`,
+      v: this.gameVersion,
       room: this.roomCode,
       from: this.localPeerId,
       to: to || null,
@@ -2248,6 +2257,7 @@ class MultiplayerManager {
   sendJoinRequest(isMigration = false) {
     if (this.mode !== 'guest') return;
     this.sendSignal('join_req', null, {
+      version: this.gameVersion,
       nickname: this.localNickname,
       ready: this.localReady,
       sessionToken: this.joinSessionToken,
@@ -2258,6 +2268,7 @@ class MultiplayerManager {
 
   handleSignalEnvelope(env) {
     if (!env || !env.id || env.room !== this.roomCode) return;
+    if (!env.v || env.v !== this.gameVersion) return;
     if (env.from === this.localPeerId) return;
     if (env.to && env.to !== this.localPeerId) return;
     if (this.seenSigIds.has(env.id)) return;
@@ -2301,6 +2312,10 @@ class MultiplayerManager {
     const { from, type, payload } = env;
 
     if (type === 'join_req') {
+      if (!payload || payload.version !== this.gameVersion) {
+        this.sendSignal('version_mismatch', from, { version: this.gameVersion });
+        return;
+      }
       const existing = this.peers.get(from);
       const existingPcState = existing && existing.pc ? existing.pc.connectionState : 'closed';
       const existingAlive = !!(
@@ -2569,6 +2584,7 @@ class MultiplayerManager {
     const survOrder = this.computeMigrationOrder().filter((id) => id !== newHostPeer.peerId);
     const payload = {
       type: 'lobby_handoff',
+      version: this.gameVersion,
       oldHostPeerId: this.localPeerId,
       newHostPeerId: newHostPeer.peerId,
       ownerPeerId,
@@ -2722,6 +2738,7 @@ class MultiplayerManager {
       this.rebuildHostPlayersList();
       this.sendToPeerCtrl(peer, {
         type: 'welcome',
+        version: this.gameVersion,
         assignedSlot: peer.slot,
         inGame: this.isInGame,
         ownerPeerId: this.roomOwnerPeerId || this.localPeerId,
@@ -2848,6 +2865,11 @@ class MultiplayerManager {
   handleHostCtrlMessage(peer, msg) {
     if (!msg || !msg.type) return;
     if (msg.type === 'hello') {
+      if (msg.version !== this.gameVersion) {
+        this.sendToPeerCtrl(peer, { type: 'version_mismatch', version: this.gameVersion });
+        setTimeout(() => this.removePeer(peer.peerId), 80);
+        return;
+      }
       peer.nickname = String(msg.nickname || '').trim().slice(0, 12);
       peer.ready = this.isInGame ? false : (msg.ready !== undefined ? !!msg.ready : !!peer.ready);
       this.rebuildHostPlayersList();
@@ -3002,6 +3024,8 @@ class MultiplayerManager {
       this.handleRoomFullReject();
     } else if (type === 'game_in_progress') {
       this.handleGameInProgressReject();
+    } else if (type === 'version_mismatch') {
+      this.handleVersionMismatchReject();
     } else if (type === 'webrtc_offer') {
       if (this.hostPeer && this.hostPeer.connEpoch === payload.connEpoch && this.hostPeer.hostPeerId === from) {
         return;
@@ -3074,6 +3098,7 @@ class MultiplayerManager {
           this.clearJoinNotFoundTimeout();
           this.sendToHostCtrl({
             type: 'hello',
+            version: this.gameVersion,
             nickname: this.localNickname,
             ready: this.localReady
           });
@@ -3227,6 +3252,10 @@ class MultiplayerManager {
   handleGuestCtrlMessage(msg) {
     if (!msg || !msg.type) return;
     if (msg.type === 'welcome') {
+      if (msg.version !== this.gameVersion) {
+        this.handleVersionMismatchReject();
+        return;
+      }
       this.connectionStatus = 'connected';
       this.statusDetail = '';
       this.reconnectingFromMigration = false;
@@ -3277,6 +3306,8 @@ class MultiplayerManager {
       this.handleHostDisconnect();
     } else if (msg.type === 'game_in_progress') {
       this.handleGameInProgressReject();
+    } else if (msg.type === 'version_mismatch') {
+      this.handleVersionMismatchReject();
     } else if (this.callbacks.onCtrlEvent) {
       this.callbacks.onCtrlEvent(msg);
     }
@@ -3284,6 +3315,7 @@ class MultiplayerManager {
 
   handleLobbyHandoffMessage(msg) {
     if (!msg || !msg.newHostPeerId || this.isInGame) return;
+    if (msg.version && msg.version !== this.gameVersion) return;
     if (this.mode === 'host') return;
     if (msg.ownerPeerId) {
       this.roomOwnerPeerId = msg.ownerPeerId;
@@ -3519,6 +3551,14 @@ class MultiplayerManager {
     this.resetGuestToSolo('IN_GAME');
     if (this.callbacks.onGameInProgressReject) {
       this.callbacks.onGameInProgressReject();
+    }
+  }
+
+  handleVersionMismatchReject() {
+    if (this.mode !== 'guest') return;
+    this.resetGuestToSolo('VERSION_MISMATCH');
+    if (this.callbacks.onVersionMismatch) {
+      this.callbacks.onVersionMismatch();
     }
   }
 

@@ -257,7 +257,7 @@ body {
 
 #room-controls {
   position: absolute;
-  top: 2.2%;
+  top: 40.5%;
   bottom: auto;
   left: 50%;
   transform: translateX(-50%);
@@ -266,7 +266,7 @@ body {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  height: clamp(24px, calc(var(--app-h) * 0.044), 38px);
+  height: clamp(20px, calc(var(--app-h) * 0.042), 36px);
   transition: opacity 0.25s ease, transform 0.22s ease;
   z-index: 10;
 }

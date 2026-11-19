@@ -49,7 +49,7 @@ class ShapeRenderer {
     ctx.globalAlpha = alpha;
     ctx.fillStyle = color;
 
-    if (type === 'cyan_star' || type === 'yellow_star' || type === 'green_star') {
+    if (type === 'cyan_star' || type === 'yellow_star' || type === 'green_star' || type === 'blue_star') {
       ShapeRenderer.drawStarPath(ctx, x, y, radius * 1.15, radius * 0.48, 5, angle - Math.PI / 2);
       ctx.fill();
     } else if (type === 'blue_circle') {

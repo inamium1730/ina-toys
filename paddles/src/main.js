@@ -99,6 +99,7 @@
     damageFlash: 0,
     enemySpawnTimer: 0,
     bossSupplyTimer: 30,
+    ballRespawnDelayTimer: -1,
     paddles: [],
     purplePaddle: null,
     balls: [],
@@ -768,6 +769,7 @@
   let hostBlockResyncTimer = 0;
   let menuVisualPaddles = [];
   let gameInProgressHintTimer = 0;
+  let versionMismatchHintTimer = 0;
   let debugStartStageIndex = 0;
   let nextSupplyDropId = 0;
 
@@ -1157,6 +1159,18 @@
       syncMenuVisualPaddles(false);
       updateMenuUI();
     },
+    onVersionMismatch: () => {
+      if (game.state === 'playing') {
+        game.state = 'menu';
+        game.menuTitleAlpha = 1;
+        game.tagTransition = 1;
+        effectsManager.reset();
+        backgroundEffect.reset();
+      }
+      versionMismatchHintTimer = 3.2;
+      syncMenuVisualPaddles(false);
+      updateMenuUI();
+    },
     onRoomNotFound: () => {
       syncMenuVisualPaddles(false);
       updateMenuUI();
@@ -1394,6 +1408,8 @@
         } else {
           roomStatus.textContent = '...';
         }
+      } else if (mp.mode === 'solo' && versionMismatchHintTimer > 0) {
+        roomStatus.textContent = 'VERSION MISMATCH';
       } else if (mp.mode === 'solo' && gameInProgressHintTimer > 0) {
         roomStatus.textContent = 'IN PROGRESS';
       } else if (mp.connectionStatus === 'disconnected') {
@@ -1661,6 +1677,7 @@
     game.damageFlash = 0;
     game.enemySpawnTimer = 0;
     game.bossSupplyTimer = 30;
+    game.ballRespawnDelayTimer = -1;
     game.paddles = [];
     game.purplePaddle = null;
     game.balls = [];
@@ -1939,6 +1956,7 @@
     backgroundEffect.reset();
     game.enemySpawnTimer = stageData.spawn_interval ? stageData.spawn_interval * 0.65 : 0;
     game.bossSupplyTimer = 30;
+    game.ballRespawnDelayTimer = -1;
 
     // ステージ開始時もブロックが1つずつEaseOutBackでポップアップして登場する（ボスマップではサイレン演出から開始）
     game.blocks = [];
@@ -2468,7 +2486,29 @@
       if (p && p.hp > 0) p.effects.yellow = 10.0;
     } else if (item.type === 'green_star') {
       if (p && p.hp > 0) p.effects.green = 10.0;
+    } else if (item.type === 'blue_star') {
+      // 同時に操作するボールの数を増やす
+      const refBall = game.balls[0];
+      const spawnX = (p && p.hp > 0) ? p.x : (refBall ? refBall.x : WIDTH / 2);
+      const spawnY = (p && p.hp > 0) ? p.y - 20 : (refBall ? refBall.y : HEIGHT / 2);
+      const newBall = new Ball(spawnX, spawnY);
+      game.balls.push(newBall);
+      game.ballRespawnDelayTimer = -1;
+      if (mp.mode === 'host') {
+        emitBallEvt(0, newBall, BALL_BOUNCE_SRC.generic);
+      }
+      effectsManager.spawnPulse({
+        kind: 'circle',
+        target: newBall,
+        x: newBall.x,
+        y: newBall.y,
+        radius: newBall.radius,
+        color: COLORS.blue,
+        duration: 0.45,
+        maxScale: 2.8
+      });
     } else if (item.type === 'blue_circle') {
+      // ボール残機を回復する (最大3)
       if (game.lives < 3) {
         game.lives += 1;
         const lifeIdx = game.lives - 1;
@@ -2483,33 +2523,17 @@
           duration: 0.5,
           maxScale: 2.6
         });
-      } else {
-        // 残機がフルの場合、同時に操作するボールの数が増える
-        const refBall = game.balls[0];
-        const spawnX = (p && p.hp > 0) ? p.x : (refBall ? refBall.x : WIDTH / 2);
-        const spawnY = (p && p.hp > 0) ? p.y - 20 : (refBall ? refBall.y : HEIGHT / 2);
-        const newBall = new Ball(spawnX, spawnY);
-        game.balls.push(newBall);
-        if (mp.mode === 'host') {
-          emitBallEvt(0, newBall, BALL_BOUNCE_SRC.generic);
-        }
-        effectsManager.spawnPulse({
-          kind: 'circle',
-          target: newBall,
-          x: newBall.x,
-          y: newBall.y,
-          radius: newBall.radius,
-          color: COLORS.blue,
-          duration: 0.45,
-          maxScale: 2.8
-        });
       }
     } else if (item.type === 'pink_heart') {
-      // パドルのHP自然再生までの残り時間を0にする (HP=0のパドルは復活しない)
+      // パドルのHPを10秒間またはフル回復するまで自然再生させる（効果中の被弾でも自然再生時間はリセットされない）
       if (p && p.hp > 0) {
-        p.timeSinceLastDamage = PADDLE.REGEN_DELAY;
-        effectsManager.spawnCircleParticles(p.x - p.currentWidth / 2, p.y, COLORS.white, 6, 20, 70);
-        effectsManager.spawnCircleParticles(p.x + p.currentWidth / 2, p.y, COLORS.white, 6, 20, 70);
+        if (p.hp < p.maxHp) {
+          p.heartRegenTimer = 10.0;
+        } else {
+          p.heartRegenTimer = 0;
+        }
+        effectsManager.spawnCircleParticles(p.x - p.currentWidth / 2, p.y, COLORS.pink, 6, 20, 70);
+        effectsManager.spawnCircleParticles(p.x + p.currentWidth / 2, p.y, COLORS.pink, 6, 20, 70);
       }
     } else if (item.type === 'purple_square') {
       const spawnX = p ? p.x : WIDTH / 2;
@@ -2563,7 +2587,8 @@
         p.isLocal ? 0 : (lastProcessedInputSeqBySlot.get(p.slot) || 0),
         p.respawnTimer || 0,
         p.respawnPenalty || 0,
-        p.guardTimer || 0
+        p.guardTimer || 0,
+        (p.hp >= p.maxHp) ? 0 : (p.heartRegenTimer || 0)
       ]),
       pp: game.purplePaddle
         ? [game.purplePaddle.x, game.purplePaddle.width, game.purplePaddle.bounces]
@@ -3178,7 +3203,7 @@
     const nextPaddles = [];
     const totalCount = Math.max(1, snap.ps.length);
     for (const row of snap.ps) {
-      const [slot, x, hp, maxHp, cw, clk, cyan, yellow, green, nickRaw, contestedCnt, regenTime, invTimer, ackSeq, respawnTimer, respawnPenalty, guardTimer] = row;
+      const [slot, x, hp, maxHp, cw, clk, cyan, yellow, green, nickRaw, contestedCnt, regenTime, invTimer, ackSeq, respawnTimer, respawnPenalty, guardTimer, heartRegenTimer] = row;
       let p = game.paddles.find((item) => item.slot === slot);
       const existed = Boolean(p);
       const nick = nickRaw !== null && nickRaw !== undefined
@@ -3215,6 +3240,7 @@
       if (!hasPendingSelfHit) {
         p.hp = hp;
         if (regenTime !== undefined) p.timeSinceLastDamage = regenTime;
+        if (heartRegenTimer !== undefined) p.heartRegenTimer = (p.hp >= p.maxHp) ? 0 : heartRegenTimer;
         if (invTimer !== undefined) p.invincibleTimer = invTimer;
         if (respawnTimer !== undefined) p.respawnTimer = respawnTimer;
         if (guardTimer !== undefined) {
@@ -3528,6 +3554,12 @@
     if (gameInProgressHintTimer > 0) {
       gameInProgressHintTimer = Math.max(0, gameInProgressHintTimer - dt);
       if (gameInProgressHintTimer === 0) {
+        updateMenuUI();
+      }
+    }
+    if (versionMismatchHintTimer > 0) {
+      versionMismatchHintTimer = Math.max(0, versionMismatchHintTimer - dt);
+      if (versionMismatchHintTimer === 0) {
         updateMenuUI();
       }
     }
@@ -3936,35 +3968,45 @@
     }
 
     // すべてのボールが落下した場合:
-    // 全滅時（全パドルHP0）または次ステージ開始時にペナルティリセット＆復活
+    // まず1秒間待機してから、残機消費・全滅時パドル復活・ボール復活またはゲームオーバー処理を行う
     if (game.balls.length === 0) {
-      if (game.lives > 0) {
-        game.lives -= 1;
-        const allDead = isAllPaddlesDead();
-        if (allDead) {
-          resetRespawnPenalties();
-          reviveDeadPaddles();
-        }
-        const alivePaddles = game.paddles.filter((p) => p.hp > 0);
-        if (alivePaddles.length === 0 && game.paddles.length === 0) return;
-        const newBall = Ball.createCenterSpawn();
-        game.balls.push(newBall);
-        if (mp.mode === 'host') {
-          emitBallEvt(0, newBall, BALL_BOUNCE_SRC.respawn);
-        }
-        effectsManager.spawnPulse({
-          kind: 'circle',
-          target: newBall,
-          x: newBall.x,
-          y: newBall.y,
-          radius: BALL.BASE_RADIUS,
-          color: COLORS.white,
-          duration: 0.45,
-          maxScale: 2.5
-        });
+      if (game.ballRespawnDelayTimer < 0) {
+        game.ballRespawnDelayTimer = 1.0;
       } else {
-        endGame('gameover');
+        game.ballRespawnDelayTimer = Math.max(0, game.ballRespawnDelayTimer - dt);
+        if (game.ballRespawnDelayTimer <= 0) {
+          game.ballRespawnDelayTimer = -1;
+          if (game.lives > 0) {
+            game.lives -= 1;
+            const allDead = isAllPaddlesDead();
+            if (allDead) {
+              resetRespawnPenalties();
+              reviveDeadPaddles();
+            }
+            const alivePaddles = game.paddles.filter((p) => p.hp > 0);
+            if (alivePaddles.length === 0 && game.paddles.length === 0) return;
+            const newBall = Ball.createCenterSpawn();
+            game.balls.push(newBall);
+            if (mp.mode === 'host') {
+              emitBallEvt(0, newBall, BALL_BOUNCE_SRC.respawn);
+            }
+            effectsManager.spawnPulse({
+              kind: 'circle',
+              target: newBall,
+              x: newBall.x,
+              y: newBall.y,
+              radius: BALL.BASE_RADIUS,
+              color: COLORS.white,
+              duration: 0.45,
+              maxScale: 2.5
+            });
+          } else {
+            endGame('gameover');
+          }
+        }
       }
+    } else {
+      game.ballRespawnDelayTimer = -1;
     }
 
     // 7. ステージクリア＆シームレス移行演出

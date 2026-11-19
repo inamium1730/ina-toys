@@ -2,6 +2,7 @@
  * ゲーム全体の定数定義
  */
 const GAME_CONFIG = {
+  VERSION: '1.1.0',
   WIDTH: 780,
   HEIGHT: 900,
 
@@ -72,6 +73,7 @@ const GAME_CONFIG = {
       'cyan_star',
       'yellow_star',
       'green_star',
+      'blue_star',
       'blue_circle',
       'pink_heart',
       'purple_square'

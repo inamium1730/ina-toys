@@ -22,6 +22,7 @@ class Paddle {
     this.currentWidth = this.computeWidthForHp(this.hp);
     this.height = PADDLE.HEIGHT;
     this.timeSinceLastDamage = 0;
+    this.heartRegenTimer = 0;
     this.regenParticleTimer = 0;
     this.effectClock = 0;
     this.pulseTimer = 0;
@@ -163,14 +164,23 @@ class Paddle {
     const { WIDTH, PADDLE, ITEM } = GAME_CONFIG;
     this.moveHorizontal(dt, input);
 
-    // 自然再生: 10秒間ダメージを受けずにいると1秒間に1HP線形に回復 (HP=0のときは回復しない)
+    // 自然再生: 10秒間無被弾またはハート効果中(最大10秒/フル回復まで)に1秒間に1HP線形に回復 (HP=0のときは回復しない)
     if (this.hp < this.maxHp) {
-      this.timeSinceLastDamage += dt;
-      if (this.timeSinceLastDamage >= PADDLE.REGEN_DELAY) {
+      const heartActive = this.heartRegenTimer > 0;
+      if (heartActive) {
+        this.heartRegenTimer = Math.max(0, this.heartRegenTimer - dt);
+      } else {
+        this.timeSinceLastDamage += dt;
+      }
+      if (heartActive || this.timeSinceLastDamage >= PADDLE.REGEN_DELAY) {
         this.hp = Math.min(this.maxHp, this.hp + PADDLE.REGEN_RATE * dt);
         this.currentWidth = this.computeWidthForHp(this.hp);
         const halfW = this.currentWidth / 2;
         this.x = ColorUtils.clamp(this.x, halfW, WIDTH - halfW);
+
+        if (this.hp >= this.maxHp) {
+          this.heartRegenTimer = 0;
+        }
 
         // 回復中は左右端から丸い白色のパーティクルを放出
         this.regenParticleTimer -= dt;
@@ -179,6 +189,8 @@ class Paddle {
           effectsManager.spawnRegenParticles(this.x, this.y, this.currentWidth, this.height, false);
         }
       }
+    } else if (this.heartRegenTimer > 0) {
+      this.heartRegenTimer = 0;
     }
 
     // 星アイテムの効果時間更新＆パルスアニメーション
@@ -202,14 +214,21 @@ class Paddle {
     if (this.hp <= 0 || !effectsManager) return;
     const { PADDLE } = GAME_CONFIG;
     if (this.hp < this.maxHp) {
-      this.timeSinceLastDamage += dt;
-      if (this.timeSinceLastDamage >= PADDLE.REGEN_DELAY) {
+      const heartActive = this.heartRegenTimer > 0;
+      if (heartActive) {
+        this.heartRegenTimer = Math.max(0, this.heartRegenTimer - dt);
+      } else {
+        this.timeSinceLastDamage += dt;
+      }
+      if (heartActive || this.timeSinceLastDamage >= PADDLE.REGEN_DELAY) {
         this.regenParticleTimer -= dt;
         if (this.regenParticleTimer <= 0) {
           this.regenParticleTimer = 0.055;
           effectsManager.spawnRegenParticles(this.x, this.y, this.currentWidth, this.height, false);
         }
       }
+    } else if (this.heartRegenTimer > 0) {
+      this.heartRegenTimer = 0;
     }
     this._stepPaddlePulse(dt, effectsManager);
   }
@@ -255,6 +274,7 @@ class Paddle {
     this.hp = this.maxHp;
     this.currentWidth = this.computeWidthForHp(this.hp);
     this.timeSinceLastDamage = 0;
+    this.heartRegenTimer = 0;
     this.regenParticleTimer = 0;
     this.invincibleTimer = 3.0;
     this.guardTimer = 0;
@@ -298,7 +318,12 @@ class Paddle {
     const oldWidth = this.currentWidth;
     this.hp = Math.max(0, this.hp - damageAmount);
     this.currentWidth = this.computeWidthForHp(this.hp);
-    this.timeSinceLastDamage = 0;
+    if (this.hp <= 0) {
+      this.timeSinceLastDamage = 0;
+      this.heartRegenTimer = 0;
+    } else if (this.heartRegenTimer <= 0) {
+      this.timeSinceLastDamage = 0;
+    }
 
     if (this.hp <= 0) {
       effectsManager.spawnPaddleShatterSection(this.x, this.y, oldWidth, this.height, this.x);

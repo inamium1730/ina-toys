@@ -20,6 +20,7 @@ class Item {
       cyan_star: COLORS.cyan,
       yellow_star: COLORS.yellow,
       green_star: COLORS.green,
+      blue_star: COLORS.blue,
       blue_circle: COLORS.blue,
       pink_heart: COLORS.pink,
       purple_square: COLORS.purple
@@ -55,6 +56,7 @@ class Item {
       { type: 'cyan_star', weight: 1.0 },
       { type: 'yellow_star', weight: 1.0 },
       { type: 'green_star', weight: 1.0 },
+      { type: 'blue_star', weight: 0.85 },
       { type: 'blue_circle', weight: 0.85 },
       { type: 'pink_heart', weight: 0.85 }
     ];
