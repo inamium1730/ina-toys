@@ -88,7 +88,7 @@ class Ball {
 
   update(dt, context) {
     const { WIDTH, HEIGHT, PADDLE, BALL, ITEM, COLORS } = GAME_CONFIG;
-    const { paddle, paddles, purplePaddle, blocks, supplyDrops = [], enemies, boss, effectsManager, onScore, onSpawnItem, onClearPurplePaddle, onBounce, swingActive = false } = context;
+    const { paddle, paddles, purplePaddle, blocks, supplyDrops = [], enemies, boss, effectsManager, onScore, onSpawnItem, onClearPurplePaddle, onBounce, swingActive = false, chronoActive = false } = context;
     const paddleList = Array.isArray(paddles) ? paddles : (paddle ? [paddle] : []);
 
     this.stepSwingVisualState(dt, !!swingActive);
@@ -168,8 +168,8 @@ class Ball {
       this.pulseTimer = 0;
     }
 
-    // 緑ボールの残像エフェクト
-    this.updateAfterimages(dt);
+    // 緑ボール・chrono効果中の残像エフェクト
+    this.updateAfterimages(dt, !!chronoActive);
 
     // 衝突抜け防止のサブステップ移動
     const subSteps = 3;
@@ -726,8 +726,8 @@ class Ball {
     }
   }
 
-  updateAfterimages(dt) {
-    if (this.effects.green > 0) {
+  updateAfterimages(dt, chronoActive = false) {
+    if (this.effects.green > 0 || chronoActive) {
       this.afterimageTimer += dt;
       if (this.afterimageTimer >= 0.02) {
         this.afterimageTimer = 0;
@@ -754,7 +754,7 @@ class Ball {
    */
   stepClientPrediction(dt, context = {}, allowLocalPaddlePrediction = true) {
     const { WIDTH, PADDLE, BALL, ITEM } = GAME_CONFIG;
-    const { localPaddle, purplePaddle = null, blocks = [], enemies = [], boss = null, supplyDrops = [], effectsManager, swingActive = false } = context;
+    const { localPaddle, purplePaddle = null, blocks = [], enemies = [], boss = null, supplyDrops = [], effectsManager, swingActive = false, chronoActive = false } = context;
 
     if (allowLocalPaddlePrediction || swingActive || this.swingVisualAlpha > 0) {
       this.stepSwingVisualState(dt, !!swingActive);
@@ -840,7 +840,7 @@ class Ball {
         this.effectClock = 0;
         this.pulseTimer = 0;
       }
-      this.updateAfterimages(dt);
+      this.updateAfterimages(dt, !!chronoActive);
     }
 
     const subSteps = 3;

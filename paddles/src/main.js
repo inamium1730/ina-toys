@@ -3549,8 +3549,12 @@
 
       // 紫色のサブパドル線形補間＆幅イージング
       if (game.purplePaddle) {
+        const prevPpX = game.purplePaddle.x;
         stepLinearInterp(game.purplePaddle, dt);
         game.purplePaddle.width += (game.purplePaddle.targetWidth - game.purplePaddle.width) * Math.min(1, dt * GAME_CONFIG.PURPLE_PADDLE.EASE_SPEED);
+        if (typeof game.purplePaddle.updateAfterimages === 'function') {
+          game.purplePaddle.updateAfterimages(dt, chronoActive, prevPpX);
+        }
       }
 
       // ボールのローカル等速計算＆ローカルパドル・ブロック反射予測
@@ -3565,7 +3569,8 @@
           boss: game.boss,
           supplyDrops: game.supplyDrops,
           effectsManager,
-          swingActive: swingActiveGuest
+          swingActive: swingActiveGuest,
+          chronoActive
         }, true);
         if (ball.y - ball.radius > HEIGHT + 40) {
           game.balls.splice(i, 1);
@@ -3812,7 +3817,7 @@
 
     // 2. 紫色のサブパドル更新
     if (game.purplePaddle) {
-      game.purplePaddle.update(dt);
+      game.purplePaddle.update(dt, chronoActive);
     }
 
     // 3. エネミー出現＆更新 (ステージ移行演出中は新規出現を停止)
@@ -4063,6 +4068,7 @@
       onDamagePaddle: damagePaddle,
       enemyNetHooks,
       swingActive: isSkillActive('swing'),
+      chronoActive,
       onScore: (pts) => {
         game.score += pts;
       },

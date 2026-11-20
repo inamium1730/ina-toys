@@ -744,7 +744,10 @@ class PurplePaddle {
     this.targetWidth = PURPLE_PADDLE.UNIT_WIDTH;
     this.height = PURPLE_PADDLE.HEIGHT;
     this.dir = GameRng.next() < 0.5 ? -1 : 1;
+    this.afterimageTimer = 0;
+    this.afterimages = [];
     this.clampPosition();
+    this._lastAfterimageX = this.x;
   }
 
   addBounceUnit() {
@@ -761,8 +764,50 @@ class PurplePaddle {
     this.x = ColorUtils.clamp(this.x, halfW, GAME_CONFIG.WIDTH - halfW);
   }
 
-  update(dt) {
+  updateAfterimages(dt, chronoActive = false, prevX = undefined) {
+    if (this.bounces <= 0 || this.width <= 0.5) {
+      if (this.afterimages.length > 0) this.afterimages = [];
+      this.afterimageTimer = 0;
+      this._lastAfterimageX = this.x;
+      return;
+    }
+    for (let i = this.afterimages.length - 1; i >= 0; i--) {
+      this.afterimages[i].alpha -= dt * 2.2;
+      if (this.afterimages[i].alpha <= 0) {
+        this.afterimages.splice(i, 1);
+      }
+    }
+    if (chronoActive) {
+      const refX = prevX !== undefined ? prevX : (this._lastAfterimageX !== undefined ? this._lastAfterimageX : this.x);
+      const movedDist = Math.abs(this.x - refX);
+      this.afterimageTimer += dt;
+      if (movedDist > 0.25 && (this.afterimages.length === 0 || this.afterimageTimer >= 0.018)) {
+        this.afterimageTimer = 0;
+        const steps = Math.min(3, Math.max(1, Math.floor(movedDist / 14)));
+        for (let s = 0; s < steps; s++) {
+          const frac = steps === 1 ? 0 : (s / steps);
+          const sampleX = refX + (this.x - refX) * frac;
+          this.afterimages.push({
+            x: sampleX,
+            y: this.y,
+            w: this.width,
+            h: this.height,
+            alpha: 0.52 * (0.7 + 0.3 * frac)
+          });
+        }
+        this._lastAfterimageX = this.x;
+      } else if (movedDist <= 0.25) {
+        this._lastAfterimageX = this.x;
+      }
+    } else {
+      this.afterimageTimer = 0;
+      this._lastAfterimageX = this.x;
+    }
+  }
+
+  update(dt, chronoActive = false) {
     const { WIDTH, PURPLE_PADDLE } = GAME_CONFIG;
+    const prevX = this.x;
     // パドルの大きさを目標幅へ向かって滑らかにイージング
     this.width += (this.targetWidth - this.width) * Math.min(1, dt * PURPLE_PADDLE.EASE_SPEED);
 
@@ -775,6 +820,7 @@ class PurplePaddle {
       this.x = WIDTH - halfW;
       this.dir = -1;
     }
+    this.updateAfterimages(dt, chronoActive, prevX);
   }
 
   consumeBounce(effectsManager) {
@@ -804,6 +850,15 @@ class PurplePaddle {
 
   render(ctx) {
     if (this.bounces <= 0 || this.width <= 0.5) return;
+    if (this.afterimages && this.afterimages.length > 0) {
+      for (const ai of this.afterimages) {
+        ctx.save();
+        ctx.globalAlpha = ai.alpha * 0.55;
+        ctx.fillStyle = GAME_CONFIG.COLORS.purple;
+        ctx.fillRect(ai.x - ai.w / 2, ai.y - ai.h / 2, ai.w, ai.h);
+        ctx.restore();
+      }
+    }
     ctx.save();
     ctx.fillStyle = GAME_CONFIG.COLORS.purple;
     ctx.fillRect(this.x - this.width / 2, this.y - this.height / 2, this.width, this.height);
