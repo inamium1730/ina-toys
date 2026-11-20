@@ -37,8 +37,9 @@ body {
 
 #game-wrapper {
   position: relative;
-  width: min(calc(var(--app-w) - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)), calc((var(--app-h) - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)) * (780 / 900)));
-  height: min(calc(var(--app-h) - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)), calc((var(--app-w) - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)) * (900 / 780)));
+  --board-h: min(calc(var(--app-h) - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)), calc((var(--app-w) - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)) * (900 / 780)));
+  width: calc(var(--board-h) * (780 / 900));
+  height: var(--board-h);
   max-width: 100%;
   max-height: 100%;
   display: flex;
@@ -59,13 +60,13 @@ body {
 
 #center-controls {
   position: absolute;
-  top: 60%;
+  top: 62%;
   left: 50%;
   transform: translate(-50%, -50%);
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: clamp(6px, calc(var(--app-h) * 0.018), 16px);
+  gap: clamp(4px, calc(var(--board-h) * 0.016), 16px);
   width: min(520px, 88%);
   z-index: 10;
   pointer-events: none;
@@ -74,8 +75,8 @@ body {
 #play-button {
   background: transparent;
   border: none;
-  width: clamp(44px, calc(var(--app-h) * 0.135), 118px);
-  height: clamp(44px, calc(var(--app-h) * 0.135), 118px);
+  width: clamp(28px, calc(var(--board-h) * 0.13), 118px);
+  height: clamp(28px, calc(var(--board-h) * 0.13), 118px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -168,11 +169,11 @@ body {
   border-bottom: 1.5px solid rgba(255, 255, 255, 0.34);
   color: #ffffff;
   font-family: 'Google Sans Flex', sans-serif;
-  font-size: clamp(14px, 2.3vh, 19px);
+  font-size: clamp(11px, calc(var(--board-h) * 0.022), 19px);
   font-weight: 500;
   letter-spacing: 2px;
   text-align: center;
-  padding: 5px 8px;
+  padding: clamp(2px, calc(var(--board-h) * 0.0055), 5px) 8px;
   outline: none;
   pointer-events: auto;
   user-select: text;
@@ -184,7 +185,7 @@ body {
 #nickname-input::placeholder {
   color: rgba(255, 255, 255, 0.28);
   letter-spacing: 3px;
-  font-size: clamp(12px, 1.8vh, 15px);
+  font-size: clamp(10px, calc(var(--board-h) * 0.018), 15px);
 }
 
 #nickname-input:focus {
@@ -221,11 +222,11 @@ body {
   gap: 6px 10px;
   color: #ffffff;
   font-family: 'Google Sans Flex', sans-serif;
-  font-size: clamp(14px, 2.3vh, 19px);
+  font-size: clamp(11px, calc(var(--board-h) * 0.022), 19px);
   font-weight: 500;
   letter-spacing: 2px;
   text-align: center;
-  padding: 5px 8px;
+  padding: clamp(2px, calc(var(--board-h) * 0.0055), 5px) 8px;
   border: none;
   pointer-events: none;
   user-select: none;
@@ -242,10 +243,10 @@ body {
 
 #lobby-hint {
   color: rgba(255, 255, 255, 0.56);
-  font-size: clamp(10px, 1.4vh, 12px);
+  font-size: clamp(8px, calc(var(--board-h) * 0.014), 12px);
   font-weight: 500;
   letter-spacing: 2px;
-  min-height: 16px;
+  min-height: clamp(10px, calc(var(--board-h) * 0.018), 16px);
   white-space: nowrap;
   pointer-events: none;
   transition: opacity 0.25s ease;
@@ -257,7 +258,7 @@ body {
 
 #room-controls {
   position: absolute;
-  top: 40.5%;
+  top: 40%;
   bottom: auto;
   left: 50%;
   transform: translateX(-50%);
@@ -266,7 +267,7 @@ body {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  height: clamp(20px, calc(var(--app-h) * 0.042), 36px);
+  height: clamp(16px, calc(var(--board-h) * 0.042), 36px);
   transition: opacity 0.25s ease, transform 0.22s ease;
   z-index: 10;
 }
@@ -278,8 +279,8 @@ body {
 }
 
 #copy-link-button {
-  width: clamp(24px, calc(var(--app-h) * 0.044), 38px);
-  height: clamp(24px, calc(var(--app-h) * 0.044), 38px);
+  width: clamp(18px, calc(var(--board-h) * 0.044), 38px);
+  height: clamp(18px, calc(var(--board-h) * 0.044), 38px);
   border-radius: 50%;
   border: none;
   background: transparent;
@@ -293,8 +294,8 @@ body {
 }
 
 #copy-link-button svg {
-  width: clamp(16px, calc(var(--app-h) * 0.025), 22px);
-  height: clamp(16px, calc(var(--app-h) * 0.025), 22px);
+  width: clamp(13px, calc(var(--board-h) * 0.025), 22px);
+  height: clamp(13px, calc(var(--board-h) * 0.025), 22px);
 }
 
 #copy-link-button:hover:not(.disabled):not(:disabled) {
@@ -341,11 +342,11 @@ body {
 }
 
 #room-code-display {
-  width: clamp(72px, calc(var(--app-h) * 0.115), 94px);
+  width: clamp(64px, calc(var(--board-h) * 0.115), 94px);
   border-bottom: 1.5px solid transparent;
   color: rgba(255, 255, 255, 0.48);
   font-family: 'Google Sans Flex', sans-serif;
-  font-size: clamp(11px, calc(var(--app-h) * 0.017), 13px);
+  font-size: clamp(10px, calc(var(--board-h) * 0.017), 13px);
   font-weight: 600;
   line-height: 1.1;
   letter-spacing: 2.2px;
@@ -380,7 +381,7 @@ body {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  height: clamp(24px, calc(var(--app-h) * 0.044), 38px);
+  height: clamp(18px, calc(var(--board-h) * 0.044), 38px);
   margin: 0;
 }
 
@@ -389,13 +390,13 @@ body {
 }
 
 #room-code-input {
-  width: clamp(72px, calc(var(--app-h) * 0.115), 94px);
+  width: clamp(64px, calc(var(--board-h) * 0.115), 94px);
   background: transparent;
   border: none;
   border-bottom: 1.5px solid rgba(255, 255, 255, 0.36);
   color: #ffffff;
   font-family: 'Google Sans Flex', sans-serif;
-  font-size: clamp(11px, calc(var(--app-h) * 0.017), 13px);
+  font-size: clamp(10px, calc(var(--board-h) * 0.017), 13px);
   font-weight: 600;
   line-height: 1.1;
   letter-spacing: 2.2px;
@@ -465,7 +466,7 @@ body {
   left: 50%;
   transform: translateX(-50%);
   color: rgba(255, 255, 255, 0.48);
-  font-size: clamp(10px, calc(var(--app-h) * 0.014), 11px);
+  font-size: clamp(9px, calc(var(--board-h) * 0.014), 11px);
   font-weight: 500;
   letter-spacing: 1.6px;
   min-height: 14px;

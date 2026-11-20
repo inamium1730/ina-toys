@@ -80,6 +80,9 @@
 
   const DAMAGE_SHAKE_DURATION = 0.11;
   const CRACK_SHAKE_DURATION = 0.14;
+  const CHRONO_TARGET_SCALE = 0.5;
+  const CHRONO_ENTER_DURATION = 0.5;
+  const CHRONO_EXIT_DURATION = 1.0;
   const NICKNAME_STORAGE_KEY = 'paddles_nickname';
 
   const game = {
@@ -96,6 +99,9 @@
     shakeTimer: 0,
     shakeMagnitude: 0,
     warpSpeedMultiplier: 1,
+    worldTimeScale: 1,
+    chronoRecoveryTimer: 0,
+    chronoStartScale: 1,
     damageFlash: 0,
     enemySpawnTimer: 0,
     bossSupplyTimer: 30,
@@ -143,7 +149,7 @@
 
   function buildSkillIconSvg(skillKey, iconSize = 0) {
     if (typeof document === 'undefined' || typeof document.createElementNS !== 'function') return null;
-    if (skillKey !== 'swing' && skillKey !== 'crack' && skillKey !== 'guard') return null;
+    if (skillKey !== 'swing' && skillKey !== 'crack' && skillKey !== 'guard' && skillKey !== 'chrono') return null;
     const ns = 'http://www.w3.org/2000/svg';
     const svg = document.createElementNS(ns, 'svg');
     svg.setAttribute('viewBox', '0 0 32 32');
@@ -153,6 +159,17 @@
     if (iconSize > 0) {
       svg.setAttribute('width', String(iconSize));
       svg.setAttribute('height', String(iconSize));
+    }
+
+    if (skillKey === 'chrono') {
+      svg.setAttribute('id', 'mdi-clock');
+      svg.setAttribute('viewBox', '0 0 24 24');
+      svg.setAttribute('data-svgname', 'Clock');
+      const path = document.createElementNS(ns, 'path');
+      path.setAttribute('d', 'M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M16.2,16.2L11,13V7H12.5V12.2L17,14.9L16.2,16.2Z');
+      path.setAttribute('fill', '#ffffff');
+      svg.appendChild(path);
+      return svg;
     }
 
     if (skillKey === 'guard') {
@@ -454,6 +471,9 @@
   function resetSkillsState() {
     clearSkillUnlockAnimation();
     game.skills = createInitialSkillsState();
+    game.worldTimeScale = 1;
+    game.chronoRecoveryTimer = 0;
+    game.chronoStartScale = 1;
     renderSkillBarUI();
   }
 
@@ -682,6 +702,9 @@
       executeCrackSkill();
     } else if (key === 'guard') {
       executeGuardSkill(def.duration);
+    } else if (key === 'chrono') {
+      game.chronoStartScale = game.worldTimeScale !== undefined ? game.worldTimeScale : 1;
+      game.chronoRecoveryTimer = CHRONO_EXIT_DURATION;
     }
     if (mp.mode === 'host') {
       sendHostSnapshot(true);
@@ -699,18 +722,36 @@
     return activateSkillOnHost(key);
   }
 
+  function computeChronoWorldScale(activeTimer, totalDuration = 10) {
+    const dur = totalDuration > 0 ? totalDuration : 10;
+    const elapsed = ColorUtils.clamp(dur - activeTimer, 0, dur);
+    if (elapsed < CHRONO_ENTER_DURATION) {
+      const u = ColorUtils.clamp(elapsed / CHRONO_ENTER_DURATION, 0, 1);
+      const startScale = game.chronoStartScale !== undefined ? game.chronoStartScale : 1;
+      return startScale + (CHRONO_TARGET_SCALE - startScale) * easeOutCubic(u);
+    }
+    return CHRONO_TARGET_SCALE;
+  }
+
   function updateSkills(dt) {
     if (game.state !== 'playing') return;
     const defs = getSkillDefs();
+    let chronoWasActive = false;
+    let chronoOvertimeDt = 0;
+
     for (const key of Object.keys(game.skills)) {
       const def = defs[key];
       const sk = game.skills[key];
       if (!def || !sk || !sk.unlocked) continue;
       let remainingDt = dt;
       if (sk.activeTimer > 0) {
+        if (key === 'chrono') chronoWasActive = true;
         const consumed = Math.min(sk.activeTimer, remainingDt);
         sk.activeTimer = Math.max(0, sk.activeTimer - consumed);
         remainingDt -= consumed;
+        if (key === 'chrono' && sk.activeTimer <= 0) {
+          chronoOvertimeDt = remainingDt;
+        }
       }
       const maxStock = def.stock || 1;
       if (sk.activeTimer <= 0 && sk.currentStock < maxStock) {
@@ -727,6 +768,26 @@
         sk.cooldownTimer = 0;
       }
     }
+
+    const chronoSk = game.skills.chrono;
+    const chronoDef = defs.chrono;
+    if (chronoSk && chronoSk.unlocked && chronoSk.activeTimer > 0) {
+      game.chronoRecoveryTimer = CHRONO_EXIT_DURATION;
+      game.worldTimeScale = computeChronoWorldScale(chronoSk.activeTimer, (chronoDef && chronoDef.duration) || 10);
+    } else {
+      if (chronoWasActive) {
+        game.chronoRecoveryTimer = Math.max(0, CHRONO_EXIT_DURATION - chronoOvertimeDt);
+      } else if (game.chronoRecoveryTimer > 0) {
+        game.chronoRecoveryTimer = Math.max(0, game.chronoRecoveryTimer - dt);
+      }
+      if (game.chronoRecoveryTimer > 0) {
+        const u = ColorUtils.clamp(1 - game.chronoRecoveryTimer / CHRONO_EXIT_DURATION, 0, 1);
+        game.worldTimeScale = CHRONO_TARGET_SCALE + (1 - CHRONO_TARGET_SCALE) * easeInOutQuad(u);
+      } else {
+        game.worldTimeScale = 1;
+      }
+    }
+
     renderSkillBarUI();
   }
 
@@ -2245,7 +2306,7 @@
     const pRight = p.x + p.currentWidth / 2;
     const pTop = p.y - p.height / 2;
     const pBottom = p.y + p.height / 2;
-    if (b.shape === 'crescent' || b.shape === 'knife') {
+    if (b.shape === 'crescent' || b.shape === 'knife' || b.shape === 'rocket' || b.shape === 'waves') {
       const nx = ColorUtils.clamp(b.x, pLeft, pRight);
       const ny = ColorUtils.clamp(b.y, pTop, pBottom);
       return Math.hypot(b.x - nx, b.y - ny) <= (b.shape === 'knife' ? 6 : 9);
@@ -2256,6 +2317,39 @@
   function resolveEnemyBulletPaddleHits(b, targetPaddles) {
     const isKnifePreLaunch = b.shape === 'knife' && b.motionMode === 'knife' && (b.knifeElapsed || 0) < 1.0;
     if (isKnifePreLaunch) return false;
+    if (b.shape === 'waves') {
+      // waves (hourglass): ヒットしてもダメージは受けずダメージエフェクトも再生されないが、10秒間移動速度低下＆被ダメージ+1
+      let hitWaves = false;
+      for (const p of targetPaddles) {
+        if (!checkEnemyBulletHitsPaddle(b, p)) continue;
+        p.applyWaveDebuff(10.0);
+        hitWaves = true;
+        if (p.isLocal) {
+          if (mp.mode === 'guest') {
+            guestSelfHitSeq += 1;
+            mp.sendToHostCtrl({
+              type: 'client_hit',
+              seq: guestSelfHitSeq,
+              waveDebuff: true,
+              damage: 0,
+              bulletId: b.id !== undefined ? b.id : null
+            });
+          } else if (mp.mode === 'host') {
+            sendHostSnapshot(true);
+          }
+        }
+      }
+      return hitWaves ? 'waves' : false;
+    }
+    if (b.shape === 'rocket') {
+      // rocket (orbit): パドルにヒットすると爆発（直接ヒット12ダメージ、周囲は半径130pxで距離減衰）
+      for (const p of targetPaddles) {
+        if (!checkEnemyBulletHitsPaddle(b, p)) continue;
+        Enemy.triggerRocketExplosion(b, effectsManager, targetPaddles, damagePaddle, p);
+        return 'rocket';
+      }
+      return false;
+    }
     let hitAny = false;
     for (const p of targetPaddles) {
       if (!checkEnemyBulletHitsPaddle(b, p)) continue;
@@ -2307,7 +2401,9 @@
     if (!peer || !msg) return;
     const p = game.paddles.find((pd) => pd && pd.slot === peer.slot);
     if (p && p.hp > 0) {
-      if (msg.shieldBreak) {
+      if (msg.waveDebuff) {
+        p.applyWaveDebuff(10.0);
+      } else if (msg.shieldBreak) {
         if (p.guardTimer > 0) {
           p.guardTimer = 0;
           p.guardScaleOutTimer = 0;
@@ -2342,7 +2438,9 @@
       const bIdx = game.enemyBullets.findIndex((eb) => eb && eb.id === msg.bulletId);
       if (bIdx !== -1) {
         const [removedB] = game.enemyBullets.splice(bIdx, 1);
-        effectsManager.spawnCircleParticles(removedB.x, removedB.y, COLORS.red, 7, 30, 120);
+        if (!msg.waveDebuff && removedB.shape !== 'waves') {
+          effectsManager.spawnCircleParticles(removedB.x, removedB.y, COLORS.red, 7, 30, 120);
+        }
         mp.sendGameEvent(NetProto.encodeBulletEvt({
           op: 1,
           serverTimeMs: mp.getServerTimeMs(),
@@ -2448,7 +2546,7 @@
   }
 
   function maybeSpawnItem(x, y, dropChance, forcedType = null) {
-    const item = Item.maybeSpawn(x, y, dropChance, game.items, game.purplePaddle, forcedType);
+    const item = Item.maybeSpawn(x, y, dropChance, game.items, game.purplePaddle, forcedType, game.lives);
     if (item) {
       game.items.push(item);
       if (mp.mode === 'host') {
@@ -2588,7 +2686,8 @@
         p.respawnTimer || 0,
         p.respawnPenalty || 0,
         p.guardTimer || 0,
-        (p.hp >= p.maxHp) ? 0 : (p.heartRegenTimer || 0)
+        (p.hp >= p.maxHp) ? 0 : (p.heartRegenTimer || 0),
+        p.waveDebuffTimer || 0
       ]),
       pp: game.purplePaddle
         ? [game.purplePaddle.x, game.purplePaddle.width, game.purplePaddle.bounces]
@@ -2810,6 +2909,7 @@
   function handleGuestGameEvent(evt) {
     if (!evt || !evt.type || mp.mode !== 'guest') return;
     const delaySec = mp.getDelaySec(evt.serverTimeMs);
+    const worldDelaySec = delaySec * (game.worldTimeScale !== undefined ? game.worldTimeScale : 1);
 
     if (evt.type === 'ball_evt') {
       if (evt.op === 0) {
@@ -2894,9 +2994,10 @@
             angle: b.angle,
             speed: b.speed,
             timer: 0,
-            damage: b.damage || 1,
+            damage: b.shape === 'waves' ? 0 : (b.damage || 1),
             shape: b.shape,
-            trail: (b.shape === 'crescent' || b.bounceWalls || b.motionMode === 'arc') ? [{ x: b.x, y: b.y }] : undefined,
+            hasTrail: Boolean(b.hasTrail || b.shape === 'crescent' || b.shape === 'rocket' || b.shape === 'waves' || b.shape === 'quick' || b.bounceWalls || b.motionMode === 'arc'),
+            trail: (b.hasTrail || b.shape === 'crescent' || b.shape === 'rocket' || b.shape === 'waves' || b.shape === 'quick' || b.bounceWalls || b.motionMode === 'arc') ? [{ x: b.x, y: b.y }] : undefined,
             explodeY: b.explodeY,
             explodeCount: b.explodeCount,
             homingMode: b.homingMode,
@@ -2915,6 +3016,12 @@
             arcBend: b.arcBend,
             arcDur: b.arcDur,
             arcElapsed: b.arcElapsed || 0,
+            rocketStartX: b.rocketStartX,
+            rocketStartY: b.rocketStartY,
+            rocketTargetX: b.rocketTargetX,
+            rocketTargetY: b.rocketTargetY,
+            rocketDur: b.rocketDur,
+            rocketElapsed: b.rocketElapsed || 0,
             knifeHoldX: b.knifeHoldX,
             knifeHoldY: b.knifeHoldY,
             knifeRiseY: b.knifeRiseY,
@@ -2922,7 +3029,7 @@
             knifeAlpha: b.knifeAlpha !== undefined ? b.knifeAlpha : 0,
             knifeVisualAngle: b.knifeVisualAngle
           };
-          Enemy.stepBulletMotion(bullet, delaySec);
+          Enemy.stepBulletMotion(bullet, worldDelaySec);
           if (isBulletOutOfBounds(bullet)) continue;
           if (!Enemy.maybeExplodeSpadeBullet(bullet, game.enemyBullets, effectsManager)) {
             game.enemyBullets.push(bullet);
@@ -2945,7 +3052,7 @@
           targetB.vx = 0;
           targetB.vy = 0;
           targetB.homingMode = 'accel';
-          Enemy.stepBulletMotion(targetB, delaySec);
+          Enemy.stepBulletMotion(targetB, worldDelaySec);
         }
       }
       return;
@@ -2976,8 +3083,8 @@
         en.fire_rate = evt.fire_rate || def.fire_rate || 0;
         en.localAutoFire = !!evt.localAutoFire;
         en.fireTimer = evt.fireTimer !== undefined ? evt.fireTimer : en.fireTimer;
-        if (delaySec > 0) {
-          en.updateClient(delaySec, game.enemyBullets, game.paddles);
+        if (worldDelaySec > 0) {
+          en.updateClient(worldDelaySec, game.enemyBullets, game.paddles);
         }
         game.enemies.push(en);
       } else if (evt.op === 1) {
@@ -2994,9 +3101,9 @@
         en.fireBullet([], firstBatch);
         en._shotSeq = evt.shotSeq || en._shotSeq;
         for (const b of firstBatch) {
-          b.x += b.vx * delaySec;
-          b.y += b.vy * delaySec;
-          b.timer = delaySec;
+          b.x += b.vx * worldDelaySec;
+          b.y += b.vy * worldDelaySec;
+          b.timer = worldDelaySec;
           if (
             !game.enemyBullets.some((eb) => eb.id === b.id) &&
             b.y <= HEIGHT + 24 && b.x >= -24 && b.x <= WIDTH + 24
@@ -3006,8 +3113,8 @@
         }
         en.localAutoFire = true;
         en.fireTimer = en.fire_rate || 1.2;
-        if (delaySec > 0) {
-          en.updateClient(delaySec, game.enemyBullets, game.paddles);
+        if (worldDelaySec > 0) {
+          en.updateClient(worldDelaySec, game.enemyBullets, game.paddles);
         }
       } else if (evt.op === 2) {
         const en = game.enemies.find((e) => e.id === evt.enemyId);
@@ -3015,7 +3122,7 @@
           const prevRenderX = en.x + (en.corrX || 0);
           const prevRenderY = en.y + (en.corrY || 0);
           const nextX = evt.x;
-          const nextY = evt.y + (en.vy || 0) * delaySec;
+          const nextY = evt.y + (en.vy || 0) * worldDelaySec;
           en.health = evt.health;
           en.x = nextX;
           en.y = nextY;
@@ -3056,8 +3163,8 @@
               en.fireTimer = evt.timer || en.fireTimer;
             }
           }
-          if (delaySec > 0) {
-            en.updateClient(delaySec, game.enemyBullets, game.paddles);
+          if (worldDelaySec > 0) {
+            en.updateClient(worldDelaySec, game.enemyBullets, game.paddles);
           }
         }
       }
@@ -3082,7 +3189,7 @@
         game.supplyDrops.push({
           id: evt.id,
           x: evt.x,
-          y: evt.y + 58 * delaySec,
+          y: evt.y + 58 * worldDelaySec,
           w: evt.w,
           h: evt.w,
           vy: 58,
@@ -3203,7 +3310,7 @@
     const nextPaddles = [];
     const totalCount = Math.max(1, snap.ps.length);
     for (const row of snap.ps) {
-      const [slot, x, hp, maxHp, cw, clk, cyan, yellow, green, nickRaw, contestedCnt, regenTime, invTimer, ackSeq, respawnTimer, respawnPenalty, guardTimer, heartRegenTimer] = row;
+      const [slot, x, hp, maxHp, cw, clk, cyan, yellow, green, nickRaw, contestedCnt, regenTime, invTimer, ackSeq, respawnTimer, respawnPenalty, guardTimer, heartRegenTimer, waveDebuffTimer] = row;
       let p = game.paddles.find((item) => item.slot === slot);
       const existed = Boolean(p);
       const nick = nickRaw !== null && nickRaw !== undefined
@@ -3241,6 +3348,18 @@
         p.hp = hp;
         if (regenTime !== undefined) p.timeSinceLastDamage = regenTime;
         if (heartRegenTimer !== undefined) p.heartRegenTimer = (p.hp >= p.maxHp) ? 0 : heartRegenTimer;
+        if (waveDebuffTimer !== undefined) {
+          const prevWave = p.waveDebuffTimer || 0;
+          const nextWave = (p.hp <= 0) ? 0 : waveDebuffTimer;
+          if (prevWave <= 0 && nextWave > 0) {
+            p.applyWaveDebuff(nextWave);
+          } else {
+            p.waveDebuffTimer = nextWave;
+            if (prevWave > 0 && prevWave < 0.35 && nextWave <= 0 && p.waveScaleOutTimer <= 0) {
+              p.waveScaleOutTimer = 0.25;
+            }
+          }
+        }
         if (invTimer !== undefined) p.invincibleTimer = invTimer;
         if (respawnTimer !== undefined) p.respawnTimer = respawnTimer;
         if (guardTimer !== undefined) {
@@ -3309,6 +3428,45 @@
       game.remoteTransitionSnap = null;
     }
 
+    // 共有スキル状態同期
+    const snapshotNewlyUnlocked = [];
+    if (Array.isArray(snap.sk)) {
+      const defs = getSkillDefs();
+      for (const row of snap.sk) {
+        const [key, unlocked, activeTimer, cooldownTimer, currentStock, mapUses] = row;
+        const sk = game.skills[key];
+        if (!sk) continue;
+        const wasUnlocked = Boolean(sk.unlocked);
+        const prevActive = sk.activeTimer || 0;
+        const nextActive = activeTimer || 0;
+        sk.unlocked = !!unlocked;
+        sk.activeTimer = nextActive;
+        sk.cooldownTimer = cooldownTimer || 0;
+        sk.currentStock = currentStock || 0;
+        sk.mapUses = mapUses || 0;
+        if (key === 'chrono') {
+          if (prevActive <= 0 && nextActive > 0) {
+            game.chronoStartScale = game.worldTimeScale !== undefined ? game.worldTimeScale : 1;
+            game.chronoRecoveryTimer = CHRONO_EXIT_DURATION;
+          } else if (prevActive > 0 && nextActive <= 0 && game.chronoRecoveryTimer <= 0) {
+            game.chronoRecoveryTimer = CHRONO_EXIT_DURATION;
+          }
+          if (nextActive > 0) {
+            game.chronoRecoveryTimer = CHRONO_EXIT_DURATION;
+            game.worldTimeScale = computeChronoWorldScale(nextActive, (defs.chrono && defs.chrono.duration) || 10);
+          }
+        }
+        if (!wasUnlocked && sk.unlocked && game.state === 'playing') {
+          snapshotNewlyUnlocked.push(key);
+        }
+      }
+    }
+    syncSkillsUnlocksForStage(game.stageNumber, game.state === 'playing');
+    for (const key of snapshotNewlyUnlocked) {
+      queueSkillUnlockAnimation(key);
+    }
+    renderSkillBarUI();
+
     // ボス同期（受信スナップショット間隔に合わせて60fpsで滑らかに補間）
     if (snap.bo) {
       const expectedBossKind = snap.bo[0] === 'snake'
@@ -3322,39 +3480,17 @@
             ? new CloudBoss(stageData)
             : (expectedBossKind === 'dragon' ? new DragonBoss(stageData) : new BigfootBoss(stageData)));
       }
-      game.boss.applySnapshot(snap.bo, Math.max(0.035, guestSnapIntervalEstimate));
+      game.boss.applySnapshot(snap.bo, Math.max(0.035, guestSnapIntervalEstimate) * (game.worldTimeScale || 1));
     } else {
       game.boss = null;
     }
-
-    // 共有スキル状態同期
-    const snapshotNewlyUnlocked = [];
-    if (Array.isArray(snap.sk)) {
-      for (const row of snap.sk) {
-        const [key, unlocked, activeTimer, cooldownTimer, currentStock, mapUses] = row;
-        const sk = game.skills[key];
-        if (!sk) continue;
-        const wasUnlocked = Boolean(sk.unlocked);
-        sk.unlocked = !!unlocked;
-        sk.activeTimer = activeTimer || 0;
-        sk.cooldownTimer = cooldownTimer || 0;
-        sk.currentStock = currentStock || 0;
-        sk.mapUses = mapUses || 0;
-        if (!wasUnlocked && sk.unlocked && game.state === 'playing') {
-          snapshotNewlyUnlocked.push(key);
-        }
-      }
-    }
-    syncSkillsUnlocksForStage(game.stageNumber, game.state === 'playing');
-    for (const key of snapshotNewlyUnlocked) {
-      queueSkillUnlockAnimation(key);
-    }
-    renderSkillBarUI();
   }
 
   function updateGuest(dt) {
     if (game.state === 'playing') {
       updateSkills(dt);
+      const worldDt = dt * (game.worldTimeScale !== undefined ? game.worldTimeScale : 1);
+      const chronoActive = isSkillActive('chrono');
 
       // パドルローカル予測（自機）＆線形補間（他プレイヤー）
       const isStageClearWarping = !!(game.remoteTransitionSnap && (
@@ -3373,20 +3509,21 @@
         if (p.invincibleTimer > 0) {
           p.invincibleTimer = Math.max(0, p.invincibleTimer - dt);
         }
-        p.stepGuardTimers(dt, effectsManager);
+        p.stepStatuses(dt, effectsManager);
         if (p.effects.cyan > 0 || p.effects.yellow > 0 || p.effects.green > 0) {
           p.effectClock += dt;
           p.effects.cyan = Math.max(0, p.effects.cyan - dt);
           p.effects.yellow = Math.max(0, p.effects.yellow - dt);
           p.effects.green = Math.max(0, p.effects.green - dt);
         }
+        const prevX = p.x;
         if (p.isLocal) {
           localPaddle = p;
           p.moveHorizontal(dt, input);
         } else {
           stepLinearInterp(p, dt);
         }
-        p.updateCosmeticEffects(dt, effectsManager);
+        p.updateCosmeticEffects(dt, effectsManager, chronoActive, prevX);
       }
 
       // 自分の入力と自パドル現在座標をバイナリパケットでホストへ送信する
@@ -3459,18 +3596,26 @@
           typeof game.boss.isEnemyHidden === 'function' &&
           game.boss.isEnemyHidden(en)
         );
-        if (!en.updateClient(dt, game.enemyBullets, localPaddlesForHit, effectsManager, damagePaddle, guestEnemyNetHooks)) {
+        if (!en.updateClient(worldDt, game.enemyBullets, localPaddlesForHit, effectsManager, damagePaddle, guestEnemyNetHooks)) {
           game.enemies.splice(i, 1);
         }
       }
-      updateConnectLaserHits(dt, localPaddlesForHit);
+      updateConnectLaserHits(worldDt, localPaddlesForHit);
 
       // 敵弾のローカル推進（等速 / 減速停止->遅延加速） & 自パドル被弾判定 & スペード弾の高度拡散
       for (let i = game.enemyBullets.length - 1; i >= 0; i--) {
         const b = game.enemyBullets[i];
-        Enemy.stepBulletMotion(b, dt);
-        if (resolveEnemyBulletPaddleHits(b, localPaddlesForHit)) {
-          effectsManager.spawnCircleParticles(b.x, b.y, COLORS.red, 7, 30, 120);
+        Enemy.stepBulletMotion(b, worldDt);
+        const hitRes = resolveEnemyBulletPaddleHits(b, localPaddlesForHit);
+        if (hitRes) {
+          if (hitRes !== 'waves' && hitRes !== 'rocket') {
+            effectsManager.spawnCircleParticles(b.x, b.y, COLORS.red, 7, 30, 120);
+          }
+          game.enemyBullets.splice(i, 1);
+          continue;
+        }
+        if (Enemy.didRocketHitWall(b)) {
+          Enemy.triggerRocketExplosion(b, effectsManager, localPaddlesForHit, damagePaddle, null);
           game.enemyBullets.splice(i, 1);
           continue;
         }
@@ -3483,7 +3628,7 @@
         }
       }
 
-      // アイテム＆サプライドロップのローカル落下
+      // アイテム（実時間1.0倍）＆サプライドロップ（ワールド時間）のローカル落下
       for (let i = game.items.length - 1; i >= 0; i--) {
         const it = game.items[i];
         it.y += ITEM.FALL_SPEED * dt;
@@ -3494,7 +3639,7 @@
       }
       for (let i = game.supplyDrops.length - 1; i >= 0; i--) {
         const drop = game.supplyDrops[i];
-        drop.y += drop.vy * dt;
+        drop.y += drop.vy * worldDt;
         if (drop.y - drop.h / 2 > HEIGHT + 30) {
           game.supplyDrops.splice(i, 1);
         }
@@ -3502,7 +3647,7 @@
 
       // ボス表示補間（位置・角度・腕・点滅タイマーを60fpsで滑らかに更新＆自パドルのみローカル被弾判定）
       if (game.boss) {
-        game.boss.updateClient(dt, localPaddlesForHit, effectsManager, damagePaddle);
+        game.boss.updateClient(worldDt, localPaddlesForHit, effectsManager, damagePaddle);
         if (game.boss.phase === 'summon') {
           game.shakeTimer = Math.max(game.shakeTimer, 0.08);
           game.shakeMagnitude = Math.max(game.shakeMagnitude, 4.2);
@@ -3586,32 +3731,35 @@
         }
         updateGuest(dt);
         updateSkillUnlockAnimation(dt);
+        const worldDtGuest = dt * (game.worldTimeScale !== undefined ? game.worldTimeScale : 1);
         const bgStageNumber = guestWarpingFlag
           ? Math.max(game.stageNumber, game.stageIndex + 2)
           : game.stageNumber;
-        backgroundEffect.update(dt, bgStageNumber, game.warpSpeedMultiplier);
+        backgroundEffect.update(worldDtGuest, bgStageNumber, game.warpSpeedMultiplier);
       }
       return;
-    }
-
-    if (game.state === 'playing') {
-      if (game.menuTitleAlpha > 0) {
-        game.menuTitleAlpha = Math.max(0, game.menuTitleAlpha - dt * 3.8);
-      }
-      const isWarpingToNext = game.transition && (
-        game.transition.phase === 'killing_enemies' ||
-        game.transition.phase === 'waiting_before_blocks'
-      );
-      const bgStageNumber = isWarpingToNext ? Math.max(game.stageNumber, game.stageIndex + 2) : game.stageNumber;
-      backgroundEffect.update(dt, bgStageNumber, game.warpSpeedMultiplier);
     }
 
     if (game.state !== 'playing') {
       return;
     }
 
+    if (game.menuTitleAlpha > 0) {
+      game.menuTitleAlpha = Math.max(0, game.menuTitleAlpha - dt * 3.8);
+    }
+
     updateSkills(dt);
     updateSkillUnlockAnimation(dt);
+
+    const worldDt = dt * (game.worldTimeScale !== undefined ? game.worldTimeScale : 1);
+    const chronoActive = isSkillActive('chrono');
+
+    const isWarpingToNext = game.transition && (
+      game.transition.phase === 'killing_enemies' ||
+      game.transition.phase === 'waiting_before_blocks'
+    );
+    const bgStageNumber = isWarpingToNext ? Math.max(game.stageNumber, game.stageIndex + 2) : game.stageNumber;
+    backgroundEffect.update(worldDt, bgStageNumber, game.warpSpeedMultiplier);
 
     const stageData = MAPS[game.stageIndex % MAPS.length];
 
@@ -3647,7 +3795,7 @@
         ? input
         : (isFresh ? ri : { left: false, right: false, pointerX: null });
       const prevX = p.x;
-      p.update(dt, pInput, effectsManager);
+      p.update(dt, pInput, effectsManager, chronoActive);
       if (!p.isLocal && ri && typeof ri.x === 'number' && Number.isFinite(ri.x)) {
         const halfW = p.currentWidth / 2;
         const targetClientX = ColorUtils.clamp(ri.x, halfW, WIDTH - halfW);
@@ -3669,7 +3817,7 @@
 
     // 3. エネミー出現＆更新 (ステージ移行演出中は新規出現を停止)
     if (!game.transition && stageData.spawn_interval && stageData.spawn_limit > 0) {
-      game.enemySpawnTimer -= dt;
+      game.enemySpawnTimer -= worldDt;
       if (game.enemySpawnTimer <= 0) {
         spawnEnemyForStage(stageData);
         game.enemySpawnTimer = stageData.spawn_interval;
@@ -3727,7 +3875,7 @@
         typeof game.boss.isEnemyHidden === 'function' &&
         game.boss.isEnemyHidden(en)
       );
-      const alive = en.update(dt, game.paddles, game.enemyBullets, effectsManager, damagePaddle, enemyNetHooks);
+      const alive = en.update(worldDt, game.paddles, game.enemyBullets, effectsManager, damagePaddle, enemyNetHooks);
       if (!alive) {
         game.enemies.splice(i, 1);
         if (mp.mode === 'host') {
@@ -3742,11 +3890,11 @@
     }
 
     // 3a. connect エネミー（quadiamond）間の 1px 接続レーザー当たり判定（自パドルのみ）
-    updateConnectLaserHits(dt, getLocalHitPaddles());
+    updateConnectLaserHits(worldDt, getLocalHitPaddles());
 
     // 3b. ボス更新＆サプライドロップ管理 (30秒ごとに正方形白色ブロックを画面上から落下)
     if (game.boss) {
-      game.boss.update(dt, {
+      game.boss.update(worldDt, {
         paddles: game.paddles,
         enemies: game.enemies,
         enemyBullets: game.enemyBullets,
@@ -3766,7 +3914,7 @@
       emitSpawnedEnemies();
 
       if (!game.transition && isBossStage(stageData) && !game.boss.isDefeated()) {
-        game.bossSupplyTimer -= dt;
+        game.bossSupplyTimer -= worldDt;
         if (game.bossSupplyTimer <= 0) {
           game.bossSupplyTimer += 30;
           const size = 60;
@@ -3799,7 +3947,7 @@
 
     for (let i = game.supplyDrops.length - 1; i >= 0; i--) {
       const drop = game.supplyDrops[i];
-      drop.y += drop.vy * dt;
+      drop.y += drop.vy * worldDt;
       if (!drop.alive || drop.y - drop.h / 2 > HEIGHT + 20) {
         game.supplyDrops.splice(i, 1);
         if (mp.mode === 'host') {
@@ -3816,7 +3964,7 @@
     const hitRemovedBulletIds = [];
     for (let i = game.enemyBullets.length - 1; i >= 0; i--) {
       const b = game.enemyBullets[i];
-      Enemy.stepBulletMotion(b, dt);
+      Enemy.stepBulletMotion(b, worldDt);
 
       if (b.homingMode === 'decel' && (b.waitAfterStop || 0) >= (b.waitTarget ?? 1.0)) {
         const alivePaddles = game.paddles.filter((pl) => pl && pl.hp > 0);
@@ -3852,8 +4000,18 @@
         }
       }
 
-      if (resolveEnemyBulletPaddleHits(b, getLocalHitPaddles())) {
-        effectsManager.spawnCircleParticles(b.x, b.y, COLORS.red, 7, 30, 120);
+      const hitRes = resolveEnemyBulletPaddleHits(b, getLocalHitPaddles());
+      if (hitRes) {
+        if (hitRes !== 'waves' && hitRes !== 'rocket') {
+          effectsManager.spawnCircleParticles(b.x, b.y, COLORS.red, 7, 30, 120);
+        }
+        if (b.id !== undefined) hitRemovedBulletIds.push(b.id);
+        game.enemyBullets.splice(i, 1);
+        continue;
+      }
+
+      if (Enemy.didRocketHitWall(b)) {
+        Enemy.triggerRocketExplosion(b, effectsManager, getLocalHitPaddles(), damagePaddle, null);
         if (b.id !== undefined) hitRemovedBulletIds.push(b.id);
         game.enemyBullets.splice(i, 1);
         continue;
@@ -4220,20 +4378,22 @@
       game.boss.render(ctx);
     }
 
-    // 5. 敵弾 (中をくり抜いた丸形／スペード型、0.5秒サイクルで赤→白点滅、イージングなし・当たり判定1px)
+    // 5. 敵弾 (中をくり抜いた丸形／スペード型など、0.5秒サイクルで点滅・イージングなし・当たり判定1px)
+    //    waves弾はダメージを与えないため赤ではなくくすんだ茶色と白で点滅させる
     ctx.save();
     ctx.lineWidth = 2.5;
     for (const b of game.enemyBullets) {
       const phase = (b.timer || 0) % ENEMY.BLINK_CYCLE;
-      const strokeColor = phase < ENEMY.BLINK_CYCLE / 2 ? COLORS.red : COLORS.white;
+      const blinkColor = b.shape === 'waves' ? (COLORS.brown || '#9e7b63') : COLORS.red;
+      const strokeColor = phase < ENEMY.BLINK_CYCLE / 2 ? blinkColor : COLORS.white;
       if (b.shape === 'spade') {
         const bAngle = b.angle !== undefined ? b.angle : Math.atan2(b.vy || 0, b.vx || 0);
         ShapeRenderer.drawEnemyShape(ctx, 'spade', b.x, b.y, 11, bAngle - Math.PI / 2, strokeColor, 1, true);
-      } else if (b.shape === 'crescent' || b.shape === 'knife') {
+      } else if (b.shape === 'crescent' || b.shape === 'knife' || b.shape === 'rocket' || b.shape === 'waves') {
         const bAngle = b.angle !== undefined ? b.angle : Math.atan2(b.vy || 0, b.vx || 0);
         const drawAngle = (b.shape === 'knife' && b.knifeVisualAngle !== undefined) ? b.knifeVisualAngle : bAngle;
         const headAlpha = (b.shape === 'knife' && b.knifeAlpha !== undefined) ? b.knifeAlpha : 1;
-        const baseRadius = b.shape === 'knife' ? 15 : 14;
+        const baseRadius = b.shape === 'knife' ? 15 : (b.shape === 'rocket' ? 13 : (b.shape === 'waves' ? 13 : 14));
         if (Array.isArray(b.trail) && b.trail.length > 0) {
           const steps = b.trail.length;
           for (let k = 0; k < steps; k++) {

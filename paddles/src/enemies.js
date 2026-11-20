@@ -151,6 +151,48 @@ const ENEMIES = {
     fire_rate: 2.5
   },
 
+  // ステージ41 ~ 50
+  aegis: {
+    name: 'aegis',
+    bullet_type: 'defend_counter', // counterに似ているが、 正面からきたボールではダメージを受けず、 その場合カウンター攻撃をする。 (背後からならダメージを受け、 カウンターもしない)
+    movement_type: 'parasol',
+    health: 1,
+    damage: 2,
+    fire_rate: 2.5
+  },
+  comet: {
+    name: 'comet',
+    bullet_type: 'aimed_spread',
+    // 弾速が通常より1.25倍速く、残像を残しながら進む。 ボスのようにクールダウンおきに行動する (ミニボス)。 クールダウンは5秒おき。
+    // 1. 弾を5回, aimedで撃つ (fire_rate)
+    // 2. 弾をaimed_spreadでfire_rateの2倍時間おきに3回撃つ。 spreadに似ているが、 プレイヤーを狙って撃つ。
+    // 3. (bombと同じで、 爆発位置まで移動するか、 倒すとbombと同じ爆発効果がある。)
+    movement_type: 'random_retro', // retroだが、 画面の端ではなくランダムなところで折り返す。
+    health: 3,
+    speed: 0.75,
+    damage: 3,
+    fire_rate: 0.5
+  },
+  orbit: {
+    name: 'orbit',
+    bullet_type: 'rocket',
+    // crescentと同じでプレイヤーの位置を予測して、 0.75倍の速度で残像を残しながら進むロケット型の弾。
+    // 敵弾は、 直線ではなく、 EaseInQuadの軌道を描くように動く。 敵弾の弾頭は常に進行方向を向く。
+    // 敵弾は、 プレイヤーや壁にヒットすると爆発する。 
+    movement_type: 'squid', // ある程度下方向へ自然に落下すると、 マリオの敵のゲッソーのようにランダムな方向の斜め上へ移動する。 この移動のしきい値はどんどん下がってゆく。
+    health: 2,
+    damage: 12, // bombと同じで威力減衰がある、 範囲はbombの半分。 直接ヒットすると12ダメージ。
+    fire_rate: 10
+  },
+  hourglass: {
+    name: 'hourglass',
+    bullet_type: 'waves', // 電波のアイコン。 2倍の速度で進行し、 残像を残しながら進む。 ヒットしてもダメージは受けず、 ダメージエフェクトも再生されないが、 10秒間、 移動速度が低下し、 すべての受けるダメージが1増加するようになる。
+    movement_type: 'straight', // fallと同じだが、 自然に回転しない。
+    health: 2,
+    damage: 0,
+    fire_rate: 5 // hourglassは、 弾を打つたびに身体を180度右回転させて上下を入れ替える。 (砂時計)
+  },
+
   // Cloudボスが召喚するダメージ判定の四角形の箱
   square: {
     name: 'square',

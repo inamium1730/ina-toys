@@ -27,8 +27,8 @@ const MAPS = [
       ' # # # # # # '
     ],
     enemies: ['triangle'],
-    spawn_interval: 19.5,
-    spawn_limit: 1
+    spawn_interval: 19,
+    spawn_limit: 3
   },
   {
     identifier: 3,
@@ -42,7 +42,7 @@ const MAPS = [
     ],
     enemies: ['diamond'],
     spawn_interval: 18,
-    spawn_limit: 2
+    spawn_limit: 3
   },
   {
     identifier: 4,
@@ -55,7 +55,7 @@ const MAPS = [
       ' ########### '
     ],
     enemies: ['pentagon'],
-    spawn_interval: 16.5,
+    spawn_interval: 17,
     spawn_limit: 3
   },
   {
@@ -69,8 +69,8 @@ const MAPS = [
       '#############'
     ],
     enemies: ['hexagon'],
-    spawn_interval: 15,
-    spawn_limit: 4
+    spawn_interval: 16,
+    spawn_limit: 3
   },
   {
     identifier: 6,
@@ -83,8 +83,8 @@ const MAPS = [
       '  #   #   #  '
     ],
     enemies: ['triangle', 'diamond'],
-    spawn_interval: 10,
-    spawn_limit: 10
+    spawn_interval: 15,
+    spawn_limit: 4
   },
   {
     identifier: 7,
@@ -97,8 +97,8 @@ const MAPS = [
       '             '
     ],
     enemies: ['pentagon', 'diamond'],
-    spawn_interval: 10,
-    spawn_limit: 10
+    spawn_interval: 14,
+    spawn_limit: 4
   },
   {
     identifier: 8,
@@ -111,8 +111,8 @@ const MAPS = [
       '#  #  #  #  #'
     ],
     enemies: ['pentagon', 'hexagon'],
-    spawn_interval: 10,
-    spawn_limit: 10
+    spawn_interval: 13,
+    spawn_limit: 4
   },
   {
     identifier: 9,
@@ -125,8 +125,8 @@ const MAPS = [
       '##  #   #  ##'
     ],
     enemies: ['triangle', 'pentagon', 'diamond', 'hexagon'],
-    spawn_interval: 10,
-    spawn_limit: 10
+    spawn_interval: 12,
+    spawn_limit: 4
   },
   {
     identifier: 10,
@@ -134,7 +134,7 @@ const MAPS = [
     map: 'boss',
     enemies: ['triangle', 'pentagon', 'diamond', 'hexagon'],
     spawn_interval: null,
-    spawn_limit: 5
+    spawn_limit: 6
   },
   {
     identifier: 11,
@@ -147,8 +147,8 @@ const MAPS = [
       '#############'
     ],
     enemies: ['triangle', 'diamond', 'hexagon', 'pentagon'],
-    spawn_interval: 7.5,
-    spawn_limit: 5
+    spawn_interval: 10,
+    spawn_limit: 4
   },
   {
     identifier: 12,
@@ -161,8 +161,8 @@ const MAPS = [
       '## ## # ## ##'
     ],
     enemies: ['triangle', 'club'],
-    spawn_interval: 14,
-    spawn_limit: 6
+    spawn_interval: 17,
+    spawn_limit: 4
   },
   {
     identifier: 13,
@@ -175,8 +175,8 @@ const MAPS = [
       '#### ## ## ##'
     ],
     enemies: ['diamond', 'spade'],
-    spawn_interval: 13,
-    spawn_limit: 7
+    spawn_interval: 16,
+    spawn_limit: 4
   },
   {
     identifier: 14,
@@ -189,8 +189,8 @@ const MAPS = [
       '#############'
     ],
     enemies: ['pentagon', 'quadiamond'],
-    spawn_interval: 12,
-    spawn_limit: 8
+    spawn_interval: 15,
+    spawn_limit: 4
   },
   {
     identifier: 15,
@@ -203,8 +203,8 @@ const MAPS = [
       '    #####    '
     ],
     enemies: ['hexagon', 'pickaxe'],
-    spawn_interval: 11,
-    spawn_limit: 9
+    spawn_interval: 14,
+    spawn_limit: 4
   },
   {
     identifier: 16,
@@ -217,8 +217,8 @@ const MAPS = [
       '#############'
     ],
     enemies: ['club', 'spade', 'triangle'],
-    spawn_interval: 10,
-    spawn_limit: 10
+    spawn_interval: 13,
+    spawn_limit: 5
   },
   {
     identifier: 17,
@@ -231,8 +231,8 @@ const MAPS = [
       ' ###     ##  '
     ],
     enemies: ['spade', 'quadiamond', 'diamond'],
-    spawn_interval: 10,
-    spawn_limit: 10
+    spawn_interval: 12,
+    spawn_limit: 5
   },
   {
     identifier: 18,
@@ -245,8 +245,8 @@ const MAPS = [
       '### #  ##  ##'
     ],
     enemies: ['quadiamond', 'pickaxe', 'pentagon'],
-    spawn_interval: 10,
-    spawn_limit: 10
+    spawn_interval: 11,
+    spawn_limit: 5
   },
   {
     identifier: 19,
@@ -260,7 +260,7 @@ const MAPS = [
     ],
     enemies: ['hexagon', 'spade', 'club', 'quadiamond', 'pickaxe'],
     spawn_interval: 10,
-    spawn_limit: 10
+    spawn_limit: 5
   },
   {
     identifier: 20,
@@ -268,7 +268,7 @@ const MAPS = [
     map: 'boss',
     enemies: ['pickaxe', 'quadiamond', 'club', 'spade'],
     spawn_interval: null,
-    spawn_limit: 5
+    spawn_limit: 8
   },
   {
     identifier: 21,
@@ -282,7 +282,7 @@ const MAPS = [
     ],
     enemies: ['spade', 'club', 'quadiamond', 'pickaxe'],
     spawn_interval: 10,
-    spawn_limit: 7
+    spawn_limit: 5
   },
   {
     identifier: 22,
@@ -295,8 +295,8 @@ const MAPS = [
       '##### ### # #'
     ],
     enemies: ['arrow', 'club'],
-    spawn_interval: 10,
-    spawn_limit: 7
+    spawn_interval: 13,
+    spawn_limit: 5
   },
   {
     identifier: 23,
@@ -309,8 +309,8 @@ const MAPS = [
       ' # # # # # # '
     ],
     enemies: ['spade', 'sparkle'],
-    spawn_interval: 10,
-    spawn_limit: 7
+    spawn_interval: 12,
+    spawn_limit: 5
   },
   {
     identifier: 24,
@@ -323,8 +323,8 @@ const MAPS = [
       '   # ###   # '
     ],
     enemies: ['quadiamond', 'wide_arrow'],
-    spawn_interval: 10,
-    spawn_limit: 7
+    spawn_interval: 11,
+    spawn_limit: 5
   },
   {
     identifier: 25,
@@ -338,7 +338,7 @@ const MAPS = [
     ],
     enemies: ['pickaxe', 'scissors'],
     spawn_interval: 10,
-    spawn_limit: 7
+    spawn_limit: 5
   },
   {
     identifier: 26,
@@ -351,8 +351,8 @@ const MAPS = [
       ' ### ### ### '
     ],
     enemies: ['arrow', 'sparkle', 'club', 'triangle'],
-    spawn_interval: 7.5,
-    spawn_limit: 7
+    spawn_interval: 9,
+    spawn_limit: 6
   },
   {
     identifier: 27,
@@ -365,8 +365,8 @@ const MAPS = [
       '  #########  '
     ],
     enemies: ['diamond', 'spade', 'sparkle', 'wide_arrow'],
-    spawn_interval: 7.5,
-    spawn_limit: 7
+    spawn_interval: 8,
+    spawn_limit: 6
   },
   {
     identifier: 28,
@@ -379,8 +379,8 @@ const MAPS = [
       '  #  ###  #  '
     ],
     enemies: ['pentagon', 'quadiamond', 'wide_arrow', 'scissors'],
-    spawn_interval: 7.5,
-    spawn_limit: 7
+    spawn_interval: 7,
+    spawn_limit: 6
   },
   {
     identifier: 29,
@@ -393,8 +393,8 @@ const MAPS = [
       '#   #   #   #'
     ],
     enemies: ['hexagon', 'pickaxe', 'scissors', 'wide_arrow', 'arrow', 'sparkle'],
-    spawn_interval: 7.5,
-    spawn_limit: 7
+    spawn_interval: 6,
+    spawn_limit: 6
   },
   {
     identifier: 30,
@@ -402,7 +402,7 @@ const MAPS = [
     map: 'boss',
     enemies: ['arrow', 'wide_arrow', 'sparkle', 'scissors', 'square'],
     spawn_interval: null,
-    spawn_limit: 7
+    spawn_limit: 10
   },
   {
     identifier: 31,
@@ -416,7 +416,7 @@ const MAPS = [
     ],
     enemies: ['sparkle', 'arrow', 'wide_arrow', 'scissors'],
     spawn_interval: 10,
-    spawn_limit: 10
+    spawn_limit: 8
   },
   {
     identifier: 32,
@@ -429,8 +429,8 @@ const MAPS = [
       '#############'
     ],
     enemies: ['prism', 'arrow'],
-    spawn_interval: 10,
-    spawn_limit: 10
+    spawn_interval: 6,
+    spawn_limit: 4
   },
   {
     identifier: 33,
@@ -443,8 +443,8 @@ const MAPS = [
       ' ########### '
     ],
     enemies: ['sparkle', 'circle'],
-    spawn_interval: 10,
-    spawn_limit: 10
+    spawn_interval: 6,
+    spawn_limit: 4
   },
   {
     identifier: 34,
@@ -457,8 +457,8 @@ const MAPS = [
       '         ####'
     ],
     enemies: ['wide_arrow', 'crescent'],
-    spawn_interval: 10,
-    spawn_limit: 10
+    spawn_interval: 6,
+    spawn_limit: 4
   },
   {
     identifier: 35,
@@ -471,8 +471,8 @@ const MAPS = [
       '# #   # # #  '
     ],
     enemies: ['scissors', 'bomb'],
-    spawn_interval: 10,
-    spawn_limit: 10
+    spawn_interval: 6,
+    spawn_limit: 4
   },
   {
     identifier: 36,
@@ -485,8 +485,8 @@ const MAPS = [
       '###  # #  ###'
     ],
     enemies: ['arrow', 'prism', 'circle', 'wide_arrow'],
-    spawn_interval: 7.5,
-    spawn_limit: 10
+    spawn_interval: 8,
+    spawn_limit: 5
   },
   {
     identifier: 37,
@@ -499,8 +499,8 @@ const MAPS = [
       ' # # # # # # '
     ],
     enemies: ['sparkle', 'circle', 'spade', 'crescent'],
-    spawn_interval: 7.5,
-    spawn_limit: 10
+    spawn_interval: 8,
+    spawn_limit: 5
   },
   {
     identifier: 38,
@@ -513,8 +513,8 @@ const MAPS = [
       '#           #'
     ],
     enemies: ['crescent', 'bomb', 'quadiamond', 'hexagon'],
-    spawn_interval: 7.5,
-    spawn_limit: 10
+    spawn_interval: 8,
+    spawn_limit: 5
   },
   {
     identifier: 39,
@@ -527,8 +527,8 @@ const MAPS = [
       '# ### ### ###'
     ],
     enemies: ['bomb', 'crescent', 'circle', 'prism', 'pentagon', 'sparkle'],
-    spawn_interval: 7.5,
-    spawn_limit: 10
+    spawn_interval: 8,
+    spawn_limit: 5
   },
   {
     identifier: 40,
@@ -536,6 +536,132 @@ const MAPS = [
     map: 'boss',
     enemies: ['prism', 'crescent', 'circle', 'bomb'],
     spawn_interval: null,
-    spawn_limit: 10
+    spawn_limit: 12
+  },
+  {
+    identifier: 41,
+    name: 'mask',
+    map: [
+      ' ##       ## ',
+      ' ########### ',
+      '  #  ###  #  ',
+      '  ##  #  ##  ',
+      '   #######   '
+    ],
+    enemies: ['prism', 'circle', 'crescent', 'bomb'],
+    spawn_interval: 10,
+    spawn_limit: 8
+  },
+  {
+    identifier: 42,
+    name: 'crown',
+    map: [
+      '      #      ',
+      '#  ## # ##  #',
+      '## # # # # ##',
+      '# #### #### #',
+      ' #    #    # '
+    ],
+    enemies: ['prism', 'aegis'],
+    spawn_interval: 6,
+    spawn_limit: 4
+  },
+  {
+    identifier: 43,
+    name: 'cancel',
+    map: [
+      '  #########  ',
+      '#############',
+      '####     ####',
+      '#############',
+      '  #########  '
+    ],
+    enemies: ['circle', 'comet'],
+    spawn_interval: 6,
+    spawn_limit: 4
+  },
+  {
+    identifier: 44,
+    name: 'send',
+    map: [
+      '#######      ',
+      '  #######    ',
+      '     ########',
+      '  #######    ',
+      '#######      '
+    ],
+    enemies: ['crescent', 'orbit'],
+    spawn_interval: 6,
+    spawn_limit: 4
+  },
+  {
+    identifier: 45,
+    name: 'usb',
+    map: [
+      ' ########### ',
+      '##         ##',
+      '## ####### ##',
+      '##         ##',
+      ' ########### '
+    ],
+    enemies: ['bomb', 'hourglass'],
+    spawn_interval: 6,
+    spawn_limit: 4
+  },
+  {
+    identifier: 46,
+    name: 'mail',
+    map: [
+      ' ########### ',
+      '#  #######  #',
+      '###  ###  ###',
+      '#####   #####',
+      '#############'
+    ],
+    enemies: ['comet', 'aegis', 'prism', 'quadiamond'],
+    spawn_interval: 8,
+    spawn_limit: 5
+  },
+  {
+    identifier: 47,
+    name: 'check',
+    map: [
+      '          ###',
+      '        #### ',
+      '###  #####   ',
+      ' #######     ',
+      '  ####       '
+    ],
+    enemies: ['comet', 'orbit', 'crescent', 'sparkle'],
+    spawn_interval: 8,
+    spawn_limit: 5
+  },
+  {
+    identifier: 48,
+    name: 'file',
+    map: [
+      '#########    ',
+      '#      ####  ',
+      '#      ######',
+      '#           #',
+      '#############'
+    ],
+    enemies: ['orbit', 'hourglass', 'bomb', 'crescent'],
+    spawn_interval: 8,
+    spawn_limit: 5
+  },
+  {
+    identifier: 49,
+    name: 'clip',
+    map: [
+      ' ########### ',
+      '            #',
+      '########### #',
+      '#           #',
+      ' ########### '
+    ],
+    enemies: ['aegis', 'comet', 'hourglass', 'orbit', 'scissors', 'pentagon'],
+    spawn_interval: 8,
+    spawn_limit: 5
   }
 ];

@@ -462,6 +462,197 @@ class ShapeRenderer {
     ctx.closePath();
   }
 
+  static drawAegisShape(ctx, x, y, radius, rotation = 0, color = '#ffffff', hollow = false) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(rotation);
+    const r = radius;
+
+    // 本体コア（上半分が露出した六角コア）
+    ShapeRenderer.drawPolygonPath(ctx, 0, -0.12 * r, r * 0.72, 6, 0);
+    if (hollow) {
+      ctx.fillStyle = '#000000';
+      ctx.fill();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2.4;
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = color;
+      ctx.fill();
+    }
+
+    // 正面（下側 +Y）を守る直線のイージス盾バー（横と背後は露出）
+    const barW = r * 1.64;
+    const barH = r * 0.26;
+    const barY = r * 0.72;
+    ctx.fillStyle = color;
+    ctx.fillRect(-barW / 2, barY, barW, barH);
+    ctx.restore();
+  }
+
+  static drawCometShape(ctx, x, y, radius, rotation = 0, color = '#ffffff', hollow = false) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(rotation);
+    const r = radius;
+
+    // 彗星ミニボス: 鋭い8芒星コア＋上部3本の尾翼
+    ShapeRenderer.drawStarPath(ctx, 0, 0.08 * r, r * 1.02, r * 0.46, 8, -Math.PI / 2);
+    if (hollow) {
+      ctx.fillStyle = '#000000';
+      ctx.fill();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2.6;
+      ctx.lineJoin = 'miter';
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(0, 0.08 * r, r * 0.24, 0, Math.PI * 2);
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = color;
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  static drawOrbitShape(ctx, x, y, radius, rotation = 0, color = '#ffffff', hollow = false) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(rotation);
+    const r = radius;
+
+    // ゲッソー風・軌道衛星ポッド: 尖った頭部＋斜め軌道リング＋下部推進脚
+    ctx.beginPath();
+    ctx.moveTo(0, -0.96 * r);
+    ctx.lineTo(0.66 * r, -0.14 * r);
+    ctx.lineTo(0.42 * r, 0.34 * r);
+    ctx.lineTo(0.54 * r, 0.88 * r);
+    ctx.lineTo(0.18 * r, 0.46 * r);
+    ctx.lineTo(0, 0.92 * r);
+    ctx.lineTo(-0.18 * r, 0.46 * r);
+    ctx.lineTo(-0.54 * r, 0.88 * r);
+    ctx.lineTo(-0.42 * r, 0.34 * r);
+    ctx.lineTo(-0.66 * r, -0.14 * r);
+    ctx.closePath();
+
+    if (hollow) {
+      ctx.fillStyle = '#000000';
+      ctx.fill();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2.5;
+      ctx.lineJoin = 'miter';
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = color;
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  static drawHourglassShape(ctx, x, y, radius, rotation = 0, color = '#ffffff', hollow = false) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(rotation);
+    const r = radius;
+
+    // 砂時計: 上下のフレームと丸みのカーブを帯びたガラス部・中央のなめらかなくびれ
+    ctx.beginPath();
+    ctx.moveTo(-0.74 * r, -0.92 * r);
+    ctx.lineTo(0.74 * r, -0.92 * r);
+    ctx.lineTo(0.74 * r, -0.76 * r);
+    ctx.lineTo(0.64 * r, -0.76 * r);
+    if (typeof ctx.bezierCurveTo === 'function') {
+      ctx.bezierCurveTo(0.76 * r, -0.34 * r, 0.13 * r, -0.20 * r, 0.13 * r, 0);
+      ctx.bezierCurveTo(0.13 * r, 0.20 * r, 0.76 * r, 0.34 * r, 0.64 * r, 0.76 * r);
+    } else {
+      ctx.lineTo(0.13 * r, 0);
+      ctx.lineTo(0.64 * r, 0.76 * r);
+    }
+    ctx.lineTo(0.74 * r, 0.76 * r);
+    ctx.lineTo(0.74 * r, 0.92 * r);
+    ctx.lineTo(-0.74 * r, 0.92 * r);
+    ctx.lineTo(-0.74 * r, 0.76 * r);
+    ctx.lineTo(-0.64 * r, 0.76 * r);
+    if (typeof ctx.bezierCurveTo === 'function') {
+      ctx.bezierCurveTo(-0.76 * r, 0.34 * r, -0.13 * r, 0.20 * r, -0.13 * r, 0);
+      ctx.bezierCurveTo(-0.13 * r, -0.20 * r, -0.76 * r, -0.34 * r, -0.64 * r, -0.76 * r);
+    } else {
+      ctx.lineTo(-0.13 * r, 0);
+      ctx.lineTo(-0.64 * r, -0.76 * r);
+    }
+    ctx.lineTo(-0.74 * r, -0.76 * r);
+    ctx.closePath();
+
+    if (hollow) {
+      ctx.fillStyle = '#000000';
+      ctx.fill();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2.5;
+      ctx.lineJoin = 'round';
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = color;
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  static drawRocketPath(ctx, x, y, radius, rotation = 0) {
+    // 進行方向 (rotation = 0 が +X) を弾頭が向くロケット形状
+    const pts = [
+      [1.12, 0],
+      [0.48, 0.34],
+      [-0.36, 0.34],
+      [-0.78, 0.66],
+      [-0.64, 0.24],
+      [-0.92, 0.18],
+      [-0.92, -0.18],
+      [-0.64, -0.24],
+      [-0.78, -0.66],
+      [-0.36, -0.34],
+      [0.48, -0.34]
+    ];
+    const cosA = Math.cos(rotation);
+    const sinA = Math.sin(rotation);
+    ctx.beginPath();
+    for (let i = 0; i < pts.length; i++) {
+      const px = pts[i][0] * radius;
+      const py = pts[i][1] * radius;
+      const wx = x + px * cosA - py * sinA;
+      const wy = y + px * sinA + py * cosA;
+      if (i === 0) ctx.moveTo(wx, wy);
+      else ctx.lineTo(wx, wy);
+    }
+    ctx.closePath();
+  }
+
+  static drawWavesShape(ctx, x, y, radius, rotation = 0, color = '#ffffff', alpha = 1) {
+    // 電波アイコン: 進行方向 (rotation) に向かって広がる3重の円弧と発信点
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(x, y);
+    ctx.rotate(rotation);
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = 2.2;
+    ctx.lineCap = 'round';
+
+    const originX = -radius * 0.45;
+    ctx.beginPath();
+    ctx.arc(originX, 0, Math.max(1.6, radius * 0.16), 0, Math.PI * 2);
+    ctx.fill();
+
+    const radii = [radius * 0.46, radius * 0.78, radius * 1.10];
+    const spread = Math.PI * 0.34;
+    for (const arcR of radii) {
+      ctx.beginPath();
+      ctx.arc(originX, 0, arcR, -spread, spread, false);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   static drawEnemyShape(ctx, enemyType, x, y, radius, rotation, color = '#ffffff', alpha = 1, hollow = false) {
     ctx.save();
     ctx.globalAlpha = alpha;
@@ -480,6 +671,36 @@ class ShapeRenderer {
 
     if (enemyType === 'bomb') {
       ShapeRenderer.drawBombShape(ctx, x, y, radius, rotation, color, hollow);
+      ctx.restore();
+      return;
+    }
+
+    if (enemyType === 'aegis') {
+      ShapeRenderer.drawAegisShape(ctx, x, y, radius, rotation, color, hollow);
+      ctx.restore();
+      return;
+    }
+
+    if (enemyType === 'comet') {
+      ShapeRenderer.drawCometShape(ctx, x, y, radius, rotation, color, hollow);
+      ctx.restore();
+      return;
+    }
+
+    if (enemyType === 'orbit') {
+      ShapeRenderer.drawOrbitShape(ctx, x, y, radius, rotation, color, hollow);
+      ctx.restore();
+      return;
+    }
+
+    if (enemyType === 'hourglass') {
+      ShapeRenderer.drawHourglassShape(ctx, x, y, radius, rotation, color, hollow);
+      ctx.restore();
+      return;
+    }
+
+    if (enemyType === 'waves') {
+      ShapeRenderer.drawWavesShape(ctx, x, y, radius, rotation, color, alpha);
       ctx.restore();
       return;
     }
@@ -547,6 +768,8 @@ class ShapeRenderer {
       ShapeRenderer.drawCrescentPath(ctx, x, y, radius, rotation);
     } else if (enemyType === 'knife') {
       ShapeRenderer.drawKnifePath(ctx, x, y, radius, rotation);
+    } else if (enemyType === 'rocket') {
+      ShapeRenderer.drawRocketPath(ctx, x, y, radius, rotation);
     } else {
       ShapeRenderer.drawPolygonPath(ctx, x, y, radius, 3, rotation + Math.PI / 2);
     }
@@ -675,6 +898,84 @@ class ShapeRenderer {
     }
     ctx.fill();
     ctx.restore();
+  }
+
+  static drawSnailIcon(ctx, cx, cy, w = 16, h = 14, color = '#ffffff', alpha = 1) {
+    if (alpha <= 0.01 || w <= 0.5 || h <= 0.5) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(cx, cy);
+    // 24x24 SVG座標系でカタツムリを描画して w x h にスケーリング
+    ctx.scale(w / 24, h / 21);
+    ctx.translate(-12, -10.5);
+
+    // 1. カタツムリの体（下部フット＋右側の頭部）
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(2.2, 16.5);
+    ctx.lineTo(18.6, 16.5);
+    if (typeof ctx.quadraticCurveTo === 'function') {
+      ctx.quadraticCurveTo(22.2, 16.5, 22.0, 12.6);
+      ctx.quadraticCurveTo(21.8, 9.6, 19.3, 9.6);
+      ctx.quadraticCurveTo(17.5, 9.6, 16.8, 12.6);
+      ctx.lineTo(14.5, 13.8);
+      ctx.lineTo(3.4, 13.8);
+      ctx.quadraticCurveTo(1.6, 13.8, 2.2, 16.5);
+    } else {
+      ctx.lineTo(22.0, 13.0);
+      ctx.lineTo(19.3, 9.6);
+      ctx.lineTo(16.8, 12.6);
+      ctx.lineTo(2.2, 14.0);
+    }
+    ctx.closePath();
+    ctx.fill();
+
+    // 2. 2本の触角（目柄）
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.65;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(19.0, 10.2);
+    ctx.lineTo(18.2, 6.2);
+    ctx.moveTo(20.6, 10.4);
+    ctx.lineTo(22.2, 6.6);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(18.1, 5.7, 1.05, 0, Math.PI * 2);
+    ctx.arc(22.4, 6.1, 1.05, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 3. 殻（シールドアイコンと同じく白のソリッド塗りつぶし）
+    const shellCx = 9.4;
+    const shellCy = 9.8;
+    const shellR = 6.2;
+    ctx.beginPath();
+    ctx.arc(shellCx, shellCy, shellR, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  /**
+   * パドルの「状態」アイコンを状態IDに応じて描画する共通ディスパッチャ
+   */
+  static drawStatusIcon(ctx, statusId, cx, cy, w, h, color = '#ffffff', alpha = 1) {
+    if (statusId === 'shield') {
+      ShapeRenderer.drawShieldIcon(ctx, cx, cy, w || 13, h || 15, color, alpha);
+    } else if (statusId === 'snail') {
+      ShapeRenderer.drawSnailIcon(ctx, cx, cy, w || 16, h || 14, color, alpha);
+    } else {
+      // 将来追加される未定義状態のフォールバック（白丸ソリッド）
+      if (alpha <= 0.01) return;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(cx, cy, Math.max(2, Math.min(w || 14, h || 14) * 0.45), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
   }
 }
 

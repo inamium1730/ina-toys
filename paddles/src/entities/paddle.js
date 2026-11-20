@@ -27,11 +27,11 @@ class Paddle {
     this.effectClock = 0;
     this.pulseTimer = 0;
     this.invincibleTimer = 0;
-    this.guardTimer = 0;
-    this.guardScaleInTimer = 0;
-    this.guardScaleOutTimer = 0;
-    this.guardPulseTimer = 0;
-    this.guardIconPulseTimer = 0;
+    this.statusPulseTimer = 0;
+    this.statuses = {};
+    for (const statusId of Object.keys(Paddle.STATUS_DEFS)) {
+      this.statuses[statusId] = Paddle._createEmptyStatusState();
+    }
     this.respawnTimer = 0;
     this.respawnPenalty = 0;
     this._deathRespawnHandled = false;
@@ -41,12 +41,126 @@ class Paddle {
       yellow: 0,
       green: 0
     };
+    this.afterimageTimer = 0;
+    this.afterimages = [];
+    this._lastAfterimageX = this.x;
+  }
+
+  static _createEmptyStatusState() {
+    return {
+      timer: 0,
+      scaleInTimer: 0,
+      scaleOutTimer: 0,
+      iconPulseTimer: 0
+    };
+  }
+
+  static registerStatus(def) {
+    if (!def || !def.id) return;
+    Paddle.STATUS_DEFS[def.id] = {
+      w: 14,
+      h: 14,
+      blinkThreshold: 3.0,
+      ...def
+    };
+  }
+
+  ensureStatus(statusId) {
+    if (!this.statuses) this.statuses = {};
+    if (!this.statuses[statusId]) {
+      this.statuses[statusId] = Paddle._createEmptyStatusState();
+    }
+    return this.statuses[statusId];
+  }
+
+  get guardTimer() { return this.ensureStatus('shield').timer; }
+  set guardTimer(v) { this.ensureStatus('shield').timer = Math.max(0, Number(v) || 0); }
+  get guardScaleInTimer() { return this.ensureStatus('shield').scaleInTimer; }
+  set guardScaleInTimer(v) { this.ensureStatus('shield').scaleInTimer = Math.max(0, Number(v) || 0); }
+  get guardScaleOutTimer() { return this.ensureStatus('shield').scaleOutTimer; }
+  set guardScaleOutTimer(v) { this.ensureStatus('shield').scaleOutTimer = Math.max(0, Number(v) || 0); }
+  get guardPulseTimer() { return this.statusPulseTimer; }
+  set guardPulseTimer(v) { this.statusPulseTimer = Math.max(0, Number(v) || 0); }
+  get guardIconPulseTimer() { return this.ensureStatus('shield').iconPulseTimer; }
+  set guardIconPulseTimer(v) { this.ensureStatus('shield').iconPulseTimer = Math.max(0, Number(v) || 0); }
+
+  get waveDebuffTimer() { return this.ensureStatus('snail').timer; }
+  set waveDebuffTimer(v) { this.ensureStatus('snail').timer = Math.max(0, Number(v) || 0); }
+  get waveScaleInTimer() { return this.ensureStatus('snail').scaleInTimer; }
+  set waveScaleInTimer(v) { this.ensureStatus('snail').scaleInTimer = Math.max(0, Number(v) || 0); }
+  get waveScaleOutTimer() { return this.ensureStatus('snail').scaleOutTimer; }
+  set waveScaleOutTimer(v) { this.ensureStatus('snail').scaleOutTimer = Math.max(0, Number(v) || 0); }
+
+  hasStatus(statusId) {
+    const st = this.statuses && this.statuses[statusId];
+    return Boolean(st && st.timer > 0);
+  }
+
+  hasAnyStatus() {
+    if (!this.statuses) return false;
+    for (const id of Object.keys(this.statuses)) {
+      if (this.statuses[id] && this.statuses[id].timer > 0) return true;
+    }
+    return false;
+  }
+
+  getStatusTimer(statusId) {
+    const st = this.statuses && this.statuses[statusId];
+    return st ? st.timer : 0;
+  }
+
+  setStatus(statusId, duration, options = {}) {
+    if (this.hp <= 0) return false;
+    const hadAnyBefore = this.hasAnyStatus();
+    const st = this.ensureStatus(statusId);
+    const wasInactive = st.timer <= 0;
+    const dur = duration > 0 ? duration : 10.0;
+    st.timer = dur;
+    if (wasInactive || options.resetScaleIn) {
+      st.scaleInTimer = 0.32;
+      st.iconPulseTimer = 0;
+    }
+    st.scaleOutTimer = 0;
+    if (!hadAnyBefore) {
+      this.statusPulseTimer = 0;
+    }
+    return true;
+  }
+
+  clearStatus(statusId, animateOut = false) {
+    const st = this.statuses && this.statuses[statusId];
+    if (!st) return;
+    const wasActive = st.timer > 0;
+    st.timer = 0;
+    st.scaleInTimer = 0;
+    st.iconPulseTimer = 0;
+    st.scaleOutTimer = (animateOut && wasActive) ? 0.25 : 0;
+    if (!this.hasAnyStatus()) {
+      this.statusPulseTimer = 0;
+    }
+  }
+
+  clearAllStatuses() {
+    if (!this.statuses) return;
+    for (const id of Object.keys(this.statuses)) {
+      const st = this.statuses[id];
+      st.timer = 0;
+      st.scaleInTimer = 0;
+      st.scaleOutTimer = 0;
+      st.iconPulseTimer = 0;
+    }
+    this.statusPulseTimer = 0;
   }
 
   getSpeed() {
     const { PADDLE } = GAME_CONFIG;
     const mult = this.effects.green > 0 ? PADDLE.GREEN_SPEED_MULTIPLIER : 1.0;
-    return PADDLE.BASE_SPEED * mult;
+    const debuffMult = this.hasStatus('snail') ? 0.55 : 1.0;
+    return PADDLE.BASE_SPEED * mult * debuffMult;
+  }
+
+  applyWaveDebuff(duration = 10.0) {
+    return this.setStatus('snail', duration > 0 ? duration : 10.0);
   }
 
   moveHorizontal(dt, input) {
@@ -78,51 +192,73 @@ class Paddle {
   }
 
   activateGuard(duration = 30) {
-    this.guardTimer = duration > 0 ? duration : 30;
-    this.guardScaleInTimer = 0.32;
-    this.guardScaleOutTimer = 0;
-    this.guardPulseTimer = 0;
-    this.guardIconPulseTimer = 0;
+    this.setStatus('shield', duration > 0 ? duration : 30, { resetScaleIn: true });
+  }
+
+  /**
+   * すべての「状態」タイマー・アイコンのパルスアニメーション・パドル点滅クロックを一括更新する
+   */
+  stepStatuses(dt, effectsManager = null) {
+    const interval = (GAME_CONFIG.ITEM && GAME_CONFIG.ITEM.PULSE_INTERVAL) || 0.5;
+    let anyActive = false;
+
+    for (const statusId of Object.keys(this.statuses)) {
+      const st = this.statuses[statusId];
+      if (!st) continue;
+      const def = Paddle.STATUS_DEFS[statusId] || { id: statusId, w: 14, h: 14 };
+
+      if (st.scaleInTimer > 0) {
+        st.scaleInTimer = Math.max(0, st.scaleInTimer - dt);
+      }
+      if (st.scaleOutTimer > 0) {
+        st.scaleOutTimer = Math.max(0, st.scaleOutTimer - dt);
+      }
+      if (st.timer > 0) {
+        st.timer = Math.max(0, st.timer - dt);
+        if (st.timer > 0) {
+          anyActive = true;
+          if (st.scaleInTimer <= 0 && effectsManager) {
+            st.iconPulseTimer += dt;
+            if (st.iconPulseTimer >= interval) {
+              st.iconPulseTimer -= interval;
+              const pos = this.getStatusIconPosition(statusId);
+              effectsManager.spawnPulse({
+                kind: 'status',
+                subType: statusId,
+                target: this,
+                offsetX: pos.x - this.x,
+                offsetY: pos.y - this.y,
+                x: pos.x,
+                y: pos.y,
+                w: pos.w,
+                h: pos.h,
+                color: def.color || GAME_CONFIG.COLORS.white,
+                duration: def.pulseDuration || 0.45,
+                maxScale: def.pulseMaxScale || 1.85
+              }, false);
+            }
+          }
+        } else {
+          st.scaleOutTimer = 0.25;
+          st.iconPulseTimer = 0;
+          if (typeof def.onExpire === 'function') {
+            def.onExpire(this);
+          }
+        }
+      } else {
+        st.iconPulseTimer = 0;
+      }
+    }
+
+    if (anyActive) {
+      this.statusPulseTimer += dt;
+    } else {
+      this.statusPulseTimer = 0;
+    }
   }
 
   stepGuardTimers(dt, effectsManager = null) {
-    if (this.guardScaleInTimer > 0) {
-      this.guardScaleInTimer = Math.max(0, this.guardScaleInTimer - dt);
-    }
-    if (this.guardScaleOutTimer > 0) {
-      this.guardScaleOutTimer = Math.max(0, this.guardScaleOutTimer - dt);
-    }
-    if (this.guardTimer > 0) {
-      this.guardTimer = Math.max(0, this.guardTimer - dt);
-      this.guardPulseTimer += dt;
-      if (this.guardTimer > 0 && this.guardScaleInTimer <= 0 && effectsManager) {
-        const interval = (GAME_CONFIG.ITEM && GAME_CONFIG.ITEM.PULSE_INTERVAL) || 0.5;
-        this.guardIconPulseTimer += dt;
-        if (this.guardIconPulseTimer >= interval) {
-          this.guardIconPulseTimer -= interval;
-          const shieldPos = this.getShieldIconPosition();
-          effectsManager.spawnPulse({
-            kind: 'shield',
-            target: this,
-            offsetY: shieldPos.y - this.y,
-            x: shieldPos.x,
-            y: shieldPos.y,
-            w: shieldPos.w,
-            h: shieldPos.h,
-            color: GAME_CONFIG.COLORS.white,
-            duration: 0.45,
-            maxScale: 1.85
-          }, false);
-        }
-      }
-      if (this.guardTimer <= 0) {
-        this.guardScaleOutTimer = 0.25;
-        this.guardIconPulseTimer = 0;
-        this.invincibleTimer = Math.max(this.invincibleTimer, 1.0);
-      }
-    } else {
-      this.guardIconPulseTimer = 0;
-    }
+    this.stepStatuses(dt, effectsManager);
   }
 
   _stepPaddlePulse(dt, effectsManager) {
@@ -150,19 +286,66 @@ class Paddle {
     }
   }
 
-  update(dt, input, effectsManager) {
+  updateAfterimages(dt, chronoActive = false, prevX = undefined) {
+    if (this.hp <= 0) {
+      if (this.afterimages.length > 0) this.afterimages = [];
+      this.afterimageTimer = 0;
+      this._lastAfterimageX = this.x;
+      return;
+    }
+    for (let i = this.afterimages.length - 1; i >= 0; i--) {
+      this.afterimages[i].alpha -= dt * 2.2;
+      if (this.afterimages[i].alpha <= 0) {
+        this.afterimages.splice(i, 1);
+      }
+    }
+    if (chronoActive) {
+      const refX = prevX !== undefined ? prevX : (this._lastAfterimageX !== undefined ? this._lastAfterimageX : this.x);
+      const movedDist = Math.abs(this.x - refX);
+      this.afterimageTimer += dt;
+      if (movedDist > 0.25 && (this.afterimages.length === 0 || this.afterimageTimer >= 0.018)) {
+        this.afterimageTimer = 0;
+        const color = ColorUtils.getStarEffectColor(this.effects, this.effectClock);
+        const steps = Math.min(3, Math.max(1, Math.floor(movedDist / 14)));
+        for (let s = 0; s < steps; s++) {
+          const frac = steps === 1 ? 0 : (s / steps);
+          const sampleX = refX + (this.x - refX) * frac;
+          this.afterimages.push({
+            x: sampleX,
+            y: this.y,
+            w: this.currentWidth,
+            h: this.height,
+            color,
+            alpha: 0.52 * (0.7 + 0.3 * frac)
+          });
+        }
+        this._lastAfterimageX = this.x;
+      } else if (movedDist <= 0.25) {
+        this._lastAfterimageX = this.x;
+      }
+    } else {
+      this.afterimageTimer = 0;
+      this._lastAfterimageX = this.x;
+    }
+  }
+
+  update(dt, input, effectsManager, chronoActive = false) {
     if (this.hp <= 0) {
       this.vx = 0;
+      if (this.afterimages.length > 0) this.afterimages = [];
+      this.afterimageTimer = 0;
       return;
     }
 
     if (this.invincibleTimer > 0) {
       this.invincibleTimer = Math.max(0, this.invincibleTimer - dt);
     }
-    this.stepGuardTimers(dt, effectsManager);
+    this.stepStatuses(dt, effectsManager);
 
     const { WIDTH, PADDLE, ITEM } = GAME_CONFIG;
+    const prevX = this.x;
     this.moveHorizontal(dt, input);
+    this.updateAfterimages(dt, chronoActive, prevX);
 
     // 自然再生: 10秒間無被弾またはハート効果中(最大10秒/フル回復まで)に1秒間に1HP線形に回復 (HP=0のときは回復しない)
     if (this.hp < this.maxHp) {
@@ -208,9 +391,10 @@ class Paddle {
   }
 
   /**
-   * ゲスト側ローカル専用: ゲームプレイに影響しない再生パーティクルや星エフェクトのパルスを描画する
+   * ゲスト側ローカル専用: ゲームプレイに影響しない再生パーティクルや星エフェクトのパルス・残像を描画する
    */
-  updateCosmeticEffects(dt, effectsManager) {
+  updateCosmeticEffects(dt, effectsManager, chronoActive = false, prevX = undefined) {
+    this.updateAfterimages(dt, chronoActive, prevX);
     if (this.hp <= 0 || !effectsManager) return;
     const { PADDLE } = GAME_CONFIG;
     if (this.hp < this.maxHp) {
@@ -254,13 +438,56 @@ class Paddle {
     return this.getMaxWidth() * Math.max(0, hp) / this.maxHp;
   }
 
-  getShieldIconPosition() {
+  /**
+   * パドル下に表示するすべての「状態」アイコン（シールド・カタツムリ・今後追加される状態）の座標一覧を返す
+   * 複数重複する場合は横並びで中央揃えし、残り効果時間が長いものほど左側に配置する
+   */
+  getStatusIconLayout() {
+    const items = [];
+    if (this.statuses) {
+      for (const statusId of Object.keys(this.statuses)) {
+        const st = this.statuses[statusId];
+        if (!st || (st.timer <= 0 && st.scaleOutTimer <= 0)) continue;
+        const def = Paddle.STATUS_DEFS[statusId] || { id: statusId, w: 14, h: 14 };
+        items.push({
+          kind: statusId,
+          remaining: Math.max(0, st.timer || 0),
+          w: def.w || 14,
+          h: def.h || 14
+        });
+      }
+    }
+    items.sort((a, b) => b.remaining - a.remaining);
+    const baseY = this.y + this.height / 2 + 27;
+    const spacing = 20;
+    const startX = this.x - ((items.length - 1) * spacing) / 2;
+    return items.map((item, idx) => ({
+      ...item,
+      x: startX + idx * spacing,
+      y: baseY
+    }));
+  }
+
+  getStatusIconPosition(statusId) {
+    const layout = this.getStatusIconLayout();
+    const found = layout.find((it) => it.kind === statusId);
+    if (found) return found;
+    const def = Paddle.STATUS_DEFS[statusId] || { id: statusId, w: 14, h: 14 };
     return {
+      kind: statusId,
       x: this.x,
       y: this.y + this.height / 2 + 27,
-      w: 13,
-      h: 15
+      w: def.w || 14,
+      h: def.h || 14
     };
+  }
+
+  getShieldIconPosition() {
+    return this.getStatusIconPosition('shield');
+  }
+
+  getSnailIconPosition() {
+    return this.getStatusIconPosition('snail');
   }
 
   revive(newMaxHp, effectsManager, totalPlayers) {
@@ -275,13 +502,16 @@ class Paddle {
     this.currentWidth = this.computeWidthForHp(this.hp);
     this.timeSinceLastDamage = 0;
     this.heartRegenTimer = 0;
+    this.clearAllStatuses();
     this.regenParticleTimer = 0;
     this.invincibleTimer = 3.0;
-    this.guardTimer = 0;
     this.respawnTimer = 0;
     this._deathRespawnHandled = false;
+    this.afterimages = [];
+    this.afterimageTimer = 0;
     const halfW = this.currentWidth / 2;
     this.x = ColorUtils.clamp(this.x, halfW, WIDTH - halfW);
+    this._lastAfterimageX = this.x;
 
     if (effectsManager) {
       effectsManager.spawnPulse({
@@ -299,28 +529,30 @@ class Paddle {
   }
 
   takeDamage(damageAmount, effectsManager) {
-    if (this.hp <= 0 || this.invincibleTimer > 0) return false;
+    if (this.hp <= 0 || this.invincibleTimer > 0 || damageAmount <= 0) return false;
 
-    if (this.guardTimer > 0) {
-      this.guardTimer = 0;
-      this.guardScaleInTimer = 0;
-      this.guardScaleOutTimer = 0;
+    if (this.hasStatus('shield')) {
+      const shieldPos = this.getShieldIconPosition();
+      this.clearStatus('shield', false);
       this.invincibleTimer = Math.max(this.invincibleTimer, 1.0);
       if (effectsManager && typeof effectsManager.spawnShieldShatter === 'function') {
-        const shieldPos = this.getShieldIconPosition();
         effectsManager.spawnShieldShatter(shieldPos.x, shieldPos.y, shieldPos.w, shieldPos.h, this.x, true, this);
       }
       return false;
     }
 
     const { COLORS } = GAME_CONFIG;
+    const effectiveDamage = this.hasStatus('snail') ? (damageAmount + 1) : damageAmount;
     const oldHp = this.hp;
     const oldWidth = this.currentWidth;
-    this.hp = Math.max(0, this.hp - damageAmount);
+    this.hp = Math.max(0, this.hp - effectiveDamage);
     this.currentWidth = this.computeWidthForHp(this.hp);
     if (this.hp <= 0) {
       this.timeSinceLastDamage = 0;
       this.heartRegenTimer = 0;
+      this.clearAllStatuses();
+      this.afterimages = [];
+      this.afterimageTimer = 0;
     } else if (this.heartRegenTimer <= 0) {
       this.timeSinceLastDamage = 0;
     }
@@ -351,6 +583,16 @@ class Paddle {
       this.invincibleTimer > 0 &&
       Math.floor(Math.max(0, 3.0 - this.invincibleTimer) / 0.25) % 2 === 1;
     ctx.save();
+    if (this.afterimages && this.afterimages.length > 0) {
+      const baseRemoteAlpha = (showMultiplayerTags && !this.isLocal) ? 0.75 : 1.0;
+      for (const ai of this.afterimages) {
+        ctx.save();
+        ctx.globalAlpha = ai.alpha * 0.55 * baseRemoteAlpha;
+        ctx.fillStyle = ai.color || ColorUtils.getStarEffectColor(this.effects, this.effectClock);
+        ctx.fillRect(ai.x - ai.w / 2, ai.y - ai.h / 2, ai.w, ai.h);
+        ctx.restore();
+      }
+    }
     ctx.save();
     ctx.fillStyle = ColorUtils.getStarEffectColor(this.effects, this.effectClock);
     let paddleAlpha = (showMultiplayerTags && !this.isLocal) ? 0.75 : 1.0;
@@ -358,8 +600,9 @@ class Paddle {
       if (isBlinkDimmed) {
         paddleAlpha *= 0.75;
       }
-    } else if (this.guardTimer > 0) {
-      const wave = 0.5 + 0.5 * Math.cos(2 * Math.PI * (this.guardPulseTimer % 1.0));
+    } else if (this.hasAnyStatus()) {
+      // どの状態が付与されていてもイージング付きの半透明・不透明の点滅アニメーションを再生
+      const wave = 0.5 + 0.5 * Math.cos(2 * Math.PI * (this.statusPulseTimer % 1.0));
       paddleAlpha *= 0.75 + 0.25 * wave;
     }
     ctx.globalAlpha = paddleAlpha;
@@ -429,44 +672,65 @@ class Paddle {
       }
     }
 
-    if (this.guardTimer > 0 || this.guardScaleOutTimer > 0) {
-      const shieldPos = this.getShieldIconPosition();
-      const isShieldBlinkDimmed =
-        this.guardTimer > 0 &&
-        this.guardTimer <= 10.0 &&
-        Math.floor(Math.max(0, 10.0 - this.guardTimer) / 0.25) % 2 === 1;
-      let shieldAlpha = (showMultiplayerTags && !this.isLocal) ? 0.75 : 1.0;
-      if (isShieldBlinkDimmed) {
-        shieldAlpha *= 0.75;
-      }
+    const statusIcons = this.getStatusIconLayout();
+    for (const icon of statusIcons) {
+      const st = this.statuses && this.statuses[icon.kind];
+      if (!st) continue;
+      const def = Paddle.STATUS_DEFS[icon.kind] || { id: icon.kind, blinkThreshold: 3.0 };
+      const baseAlpha = (showMultiplayerTags && !this.isLocal) ? 0.75 : 1.0;
+      const blinkThreshold = def.blinkThreshold !== undefined ? def.blinkThreshold : 3.0;
+      const isStatusBlinkDimmed =
+        st.timer > 0 &&
+        st.timer <= blinkThreshold &&
+        Math.floor(Math.max(0, blinkThreshold - st.timer) / 0.25) % 2 === 1;
+      const iconAlpha = isStatusBlinkDimmed ? baseAlpha * 0.75 : baseAlpha;
 
-      let shieldScale = 1.0;
-      if (this.guardScaleOutTimer > 0) {
-        const pOut = 1 - ColorUtils.clamp(this.guardScaleOutTimer / 0.25, 0, 1);
+      let iconScale = 1.0;
+      if (st.scaleOutTimer > 0) {
+        const pOut = 1 - ColorUtils.clamp(st.scaleOutTimer / 0.25, 0, 1);
         const easeOutQuad = 1 - (1 - pOut) * (1 - pOut);
-        shieldScale = Math.max(0, 1 - easeOutQuad);
-      } else if (this.guardScaleInTimer > 0) {
-        const pIn = 1 - ColorUtils.clamp(this.guardScaleInTimer / 0.32, 0, 1);
+        iconScale = Math.max(0, 1 - easeOutQuad);
+      } else if (st.scaleInTimer > 0) {
+        const pIn = 1 - ColorUtils.clamp(st.scaleInTimer / 0.32, 0, 1);
         const c1 = 1.70158;
         const c3 = c1 + 1;
-        shieldScale = Math.max(0, 1 + c3 * Math.pow(pIn - 1, 3) + c1 * Math.pow(pIn - 1, 2));
+        iconScale = Math.max(0, 1 + c3 * Math.pow(pIn - 1, 3) + c1 * Math.pow(pIn - 1, 2));
       }
 
-      if (shieldScale > 0.01) {
-        ShapeRenderer.drawShieldIcon(
+      if (iconScale > 0.01) {
+        ShapeRenderer.drawStatusIcon(
           ctx,
-          shieldPos.x,
-          shieldPos.y,
-          shieldPos.w * shieldScale,
-          shieldPos.h * shieldScale,
-          GAME_CONFIG.COLORS.white,
-          shieldAlpha
+          icon.kind,
+          icon.x,
+          icon.y,
+          icon.w * iconScale,
+          icon.h * iconScale,
+          def.color || GAME_CONFIG.COLORS.white,
+          iconAlpha
         );
       }
     }
     ctx.restore();
   }
 }
+
+Paddle.STATUS_DEFS = {
+  shield: {
+    id: 'shield',
+    w: 13,
+    h: 15,
+    blinkThreshold: 10.0,
+    onExpire(paddle) {
+      paddle.invincibleTimer = Math.max(paddle.invincibleTimer, 1.0);
+    }
+  },
+  snail: {
+    id: 'snail',
+    w: 16,
+    h: 14,
+    blinkThreshold: 3.0
+  }
+};
 
 class PurplePaddle {
   constructor(initialX) {

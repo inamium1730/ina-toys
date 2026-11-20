@@ -368,6 +368,7 @@ class NetProto {
       w.u8(p[14] || 0);         // respawnPenalty
       w.ms16(p[15] || 0);       // guardTimer
       w.ms16(p[16] || 0);       // heartRegenTimer
+      w.ms16(p[17] || 0);       // waveDebuffTimer
     }
 
     if (s.pp) {
@@ -518,7 +519,8 @@ class NetProto {
       const respawnPenalty = r.u8();
       const guardTimer = r.ms16();
       const heartRegenTimer = r.ms16();
-      ps[i] = [slot, x, hp, maxHp, cw, effClock, cyan, yellow, green, null, contested, sinceDmg, invinc, ackSeq, respawnTimer, respawnPenalty, guardTimer, heartRegenTimer];
+      const waveDebuffTimer = r.ms16();
+      ps[i] = [slot, x, hp, maxHp, cw, effClock, cyan, yellow, green, null, contested, sinceDmg, invinc, ackSeq, respawnTimer, respawnPenalty, guardTimer, heartRegenTimer, waveDebuffTimer];
     }
 
     let pp = null;
@@ -770,6 +772,18 @@ class NetProto {
           w.c10(b.knifeHoldY !== undefined ? b.knifeHoldY : b.y);
           w.ms16(b.knifeElapsed || 0);
         }
+        const isRocket = b.shape === 'rocket' || b.motionMode === 'rocket';
+        const isWaves = b.shape === 'waves';
+        const isQuick = b.shape === 'quick' || Boolean(b.hasTrail && !b.shape);
+        const extFlags = (isRocket ? 1 : 0) | (isWaves ? 2 : 0) | (isQuick ? 4 : 0);
+        w.u8(extFlags);
+        if (extFlags & 1) {
+          w.c10(b.rocketStartX !== undefined ? b.rocketStartX : b.x);
+          w.c10(b.rocketStartY !== undefined ? b.rocketStartY : b.y);
+          w.c10(b.rocketTargetX !== undefined ? b.rocketTargetX : b.x);
+          w.ms16(b.rocketDur || 1.25);
+          w.ms16(b.rocketElapsed || 0);
+        }
       }
     } else if (evt.op === 1) {
       const ids = evt.ids || [];
@@ -835,6 +849,21 @@ class NetProto {
           knifeHoldY = r.c10();
           knifeElapsed = r.ms16();
         }
+        const extFlags = r.pos < r.dv.byteLength ? r.u8() : 0;
+        const isRocket = Boolean(extFlags & 1);
+        const isWaves = Boolean(extFlags & 2);
+        const isQuick = Boolean(extFlags & 4);
+        let rocketStartX, rocketStartY, rocketTargetX, rocketDur, rocketElapsed;
+        if (isRocket && r.pos + 10 <= r.dv.byteLength) {
+          rocketStartX = r.c10();
+          rocketStartY = r.c10();
+          rocketTargetX = r.c10();
+          rocketDur = r.ms16();
+          rocketElapsed = r.ms16();
+        }
+        const finalShape = isRocket
+          ? 'rocket'
+          : (isWaves ? 'waves' : (isQuick ? 'quick' : shape));
         const vx = Math.cos(angle) * speed;
         const vy = Math.sin(angle) * speed;
         bullets[i] = {
@@ -845,8 +874,9 @@ class NetProto {
           speed,
           vx,
           vy,
-          damage,
-          shape,
+          damage: isWaves ? 0 : damage,
+          shape: finalShape,
+          hasTrail: isRocket || isWaves || isQuick || finalShape === 'crescent' || isBounce || isArc,
           explodeY,
           explodeCount,
           homingMode: isDecel ? 'decel' : undefined,
@@ -856,7 +886,7 @@ class NetProto {
           waitTarget,
           homingTimer: isDecel ? 0 : undefined,
           waitAfterStop: isDecel ? 0 : undefined,
-          motionMode: isArc ? 'arc' : (isTimedKnife ? 'knife' : undefined),
+          motionMode: isRocket ? 'rocket' : (isArc ? 'arc' : (isTimedKnife ? 'knife' : undefined)),
           bounceWalls: isBounce,
           arcStartX,
           arcStartY,
@@ -865,6 +895,12 @@ class NetProto {
           arcBend,
           arcDur,
           arcElapsed,
+          rocketStartX,
+          rocketStartY,
+          rocketTargetX,
+          rocketTargetY: isRocket ? GAME_CONFIG.PADDLE.Y : undefined,
+          rocketDur,
+          rocketElapsed,
           knifeHoldX,
           knifeHoldY,
           knifeRiseY: isTimedKnife ? 52 : undefined,
@@ -1282,26 +1318,30 @@ NetProto.BOSS_PHASES = [
   'fly_arc_up', 'arc_barrage', 'arc_return_summon',
   'intro', 'defeated'
 ];
-NetProto.SKILL_KEYS = typeof SKILLS !== 'undefined' ? Object.keys(SKILLS) : ['swing', 'crack', 'guard'];
+NetProto.SKILL_KEYS = typeof SKILLS !== 'undefined' ? Object.keys(SKILLS) : ['swing', 'crack', 'guard', 'chrono'];
 NetProto.ENEMY_NAMES = [
   'triangle', 'square', 'diamond', 'pentagon', 'hexagon', 'club', 'spade', 'quadiamond', 'pickaxe',
   'arrow', 'sparkle', 'wide_arrow', 'scissors',
-  'prism', 'circle', 'semicircle', 'crescent', 'bomb'
+  'prism', 'circle', 'semicircle', 'crescent', 'bomb',
+  'aegis', 'comet', 'orbit', 'hourglass'
 ];
 NetProto.BULLET_TYPES = [
   'none', 'single', 'spread', 'aimed', 'self_destruction', '3round', 'explode', 'connect',
   'laser', 'aimed_laser', 'aimed_3round',
-  'counter', 'slice', 'crescent', 'self_explosion'
+  'counter', 'slice', 'crescent', 'self_explosion',
+  'defend_counter', 'quick', 'aimed_spread', 'rocket', 'waves'
 ];
 NetProto.ITEM_TYPES = ['cyan_star', 'yellow_star', 'green_star', 'blue_star', 'blue_circle', 'pink_heart', 'purple_square'];
 NetProto.FX_TYPES = ['fx_pulse', 'fx_particles', 'fx_regen', 'fx_shatter', 'paddle_hit', 'fx_shield_shatter'];
 NetProto.TARGET_KINDS = ['none', 'paddle', 'ball', 'enemy', 'item', 'purple', 'boss_head', 'boss_circle'];
-NetProto.PULSE_KINDS = ['circle', 'paddle', 'block', 'enemy', 'item', 'purple_paddle', 'boss_head', 'boss_circle', 'rect', 'polygon', 'crack'];
+NetProto.PULSE_KINDS = ['circle', 'paddle', 'block', 'enemy', 'item', 'purple_paddle', 'boss_head', 'boss_circle', 'rect', 'polygon', 'crack', 'status', 'shield'];
 NetProto.SUB_TYPES = [
   'cyan', 'yellow', 'green', 'white', 'red', 'damage', 'heal', 'pickup',
+  'shield', 'snail',
   'triangle', 'square', 'diamond', 'pentagon', 'hexagon', 'club', 'spade', 'quadiamond', 'pickaxe',
   'arrow', 'sparkle', 'wide_arrow', 'scissors',
   'prism', 'circle', 'semicircle', 'crescent', 'bomb',
+  'aegis', 'comet', 'orbit', 'hourglass', 'rocket', 'waves',
   'cyan_star', 'yellow_star', 'green_star', 'blue_star', 'blue_circle', 'pink_heart', 'purple_square'
 ];
 NetProto.COLORS = [

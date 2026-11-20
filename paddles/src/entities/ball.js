@@ -340,7 +340,7 @@ class Ball {
           const destroyed = enemy.hitByBall(this, effectsManager, !!swingActive, context.enemyBullets || null);
           enemy.hitCooldown = 0.08;
 
-          const shouldPierce = this.effects.cyan > 0 || !!swingActive;
+          const shouldPierce = !enemy._lastHitBlockedByFrontShield && (this.effects.cyan > 0 || !!swingActive);
           if (!shouldPierce) {
             this.spawningFromCenter = false;
             const prevVy = this.vy;
@@ -535,7 +535,7 @@ class Ball {
         const enemy = enemies[eIdx];
         if (enemy.hitCooldown > 0) continue;
         if (Math.hypot(c.x - enemy.x, c.y - enemy.y) <= c.r + enemy.currentRadius) {
-          const destroyed = enemy.hitByBall(this, effectsManager, false, context.enemyBullets || null);
+          const destroyed = enemy.hitByBall({ x: c.x, y: c.y, effects: this.effects, isSwing: true }, effectsManager, false, context.enemyBullets || null);
           enemy.hitCooldown = 0.2;
           this._resolveEnemyHit(enemy, eIdx, destroyed, context);
         }

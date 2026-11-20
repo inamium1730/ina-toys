@@ -14,7 +14,8 @@ const GAME_CONFIG = {
     green: '#22ee66',
     blue: '#1e6fff',
     pink: '#ff66b2',
-    purple: '#aa44ff'
+    purple: '#aa44ff',
+    brown: '#9e7b63'
   },
 
   PADDLE: {

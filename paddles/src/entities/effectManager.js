@@ -29,6 +29,7 @@ class EffectManager {
       target: shapeData.target || null,
       x: shapeData.x,
       y: shapeData.y,
+      offsetX: shapeData.offsetX || 0,
       offsetY: shapeData.offsetY || 0,
       w: shapeData.w || 0,
       h: shapeData.h || 0,
@@ -323,7 +324,7 @@ class EffectManager {
       const alpha = (1 - t) * 0.55;
 
       // 追従対象(target)がある場合は、現在の座標・角度をリアルタイムに参照して置いていかれないようにする
-      const px = pls.target ? (pls.target.x + (pls.target.corrX || 0)) : pls.x;
+      const px = (pls.target ? (pls.target.x + (pls.target.corrX || 0)) : pls.x) + (pls.offsetX || 0);
       const py = (pls.target ? (pls.target.y + (pls.target.corrY || 0)) : pls.y) + (pls.offsetY || 0);
       const pAngle = pls.target
         ? (pls.target.angle !== undefined ? pls.target.angle : (pls.target.rotation !== undefined ? pls.target.rotation : pls.angle))
@@ -433,13 +434,24 @@ class EffectManager {
         ctx.closePath();
         ctx.fill();
         ctx.restore();
-      } else if (pls.kind === 'shield') {
-        ShapeRenderer.drawShieldIcon(
+      } else if (pls.kind === 'status' || pls.kind === 'shield') {
+        const statusId = pls.kind === 'status' ? (pls.subType || 'shield') : 'shield';
+        let iconX = px;
+        let iconY = py;
+        if (pls.target && typeof pls.target.getStatusIconPosition === 'function') {
+          const livePos = pls.target.getStatusIconPosition(statusId);
+          if (livePos) {
+            iconX = livePos.x + (pls.target.corrX || 0);
+            iconY = livePos.y + (pls.target.corrY || 0);
+          }
+        }
+        ShapeRenderer.drawStatusIcon(
           ctx,
-          px,
-          py,
-          (pls.w || 13) * scale,
-          (pls.h || 15) * scale,
+          statusId,
+          iconX,
+          iconY,
+          (pls.w || 14) * scale,
+          (pls.h || 14) * scale,
           pls.color || GAME_CONFIG.COLORS.white,
           alpha * 0.85
         );

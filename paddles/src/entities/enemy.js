@@ -64,6 +64,31 @@ class Enemy {
     this._aimedFallTargetChanged = false;
     this.afterimages = [];
     this.afterimageSpawnTimer = 0;
+
+    // aegis (defend_counter) 用状態
+    this._lastHitBlockedByFrontShield = false;
+
+    // comet (random_retro + quick ミニボス行動) 用状態
+    this.randomRetroTargetX = null;
+    this.cometPhase = 'cooldown';
+    this.cometTimer = 5.0;
+    this.cometNextPattern = 1;
+    this.cometShotsLeft = 0;
+    this.cometShotTimer = 0;
+
+    // orbit (squid ゲッソー移動) 用状態
+    this.squidState = 'fall';
+    this.squidThresholdY = 125;
+    this.squidJetTimer = 0;
+    this.squidJetDuration = 0.52;
+    this.squidJetVx = 0;
+    this.squidJetVy = 0;
+
+    // hourglass (射撃ごとの180度右回転) 用状態
+    this.hourglassStartRot = 0;
+    this.hourglassTargetRot = 0;
+    this.hourglassFlipTimer = 0;
+    this.hourglassFlipDuration = 0.32;
   }
 
   static makeAutoBulletId(enemyId, shotSeq, subIdx = 0) {
@@ -348,7 +373,38 @@ class Enemy {
       return;
     }
 
-    if (b.shape === 'crescent' || b.bounceWalls) {
+    if (b.motionMode === 'rocket') {
+      const dur = Math.max(0.25, b.rocketDur || 1.25);
+      const startX = b.rocketStartX !== undefined ? b.rocketStartX : b.x;
+      const startY = b.rocketStartY !== undefined ? b.rocketStartY : b.y;
+      const targetX = b.rocketTargetX !== undefined ? b.rocketTargetX : b.x;
+      const targetY = b.rocketTargetY !== undefined ? b.rocketTargetY : GAME_CONFIG.PADDLE.Y;
+      const dx = targetX - startX;
+      const dy = targetY - startY;
+      b.rocketElapsed = (b.rocketElapsed || 0) + dt;
+      const u = b.rocketElapsed / dur;
+
+      Enemy.recordBulletTrail(b, 14);
+
+      if (u <= 1) {
+        // EaseInQuad (u^2) の曲線軌道を描き、弾頭は常に進行方向を向く
+        const easeU = u * u;
+        b.x = startX + dx * easeU;
+        b.y = startY + dy * u;
+        b.vx = (2 * u * dx) / dur;
+        b.vy = dy / dur;
+      } else {
+        b.vx = (2 * dx) / dur;
+        b.vy = dy / dur;
+        b.x += b.vx * dt;
+        b.y += b.vy * dt;
+      }
+      b.speed = Math.hypot(b.vx, b.vy);
+      b.angle = Math.atan2(b.vy, b.vx);
+      return;
+    }
+
+    if (b.shape === 'crescent' || b.shape === 'rocket' || b.shape === 'waves' || b.shape === 'quick' || b.hasTrail || b.bounceWalls) {
       Enemy.recordBulletTrail(b, 14);
     }
 
@@ -366,6 +422,59 @@ class Enemy {
         b.vx = -b.vx;
         b.angle = Math.atan2(b.vy, b.vx);
       }
+    }
+  }
+
+  /**
+   * rocket 弾が壁に到達したか判定する
+   */
+  static didRocketHitWall(b) {
+    if (!b || b.shape !== 'rocket') return false;
+    const { WIDTH, HEIGHT } = GAME_CONFIG;
+    const margin = 8;
+    return b.x <= margin || b.x >= WIDTH - margin || b.y >= HEIGHT - margin || (b.y <= margin && (b.vy || 0) < 0);
+  }
+
+  /**
+   * rocket 弾の爆発処理（bombの半分の範囲=130px、距離減衰あり、直撃時12ダメージ）
+   */
+  static triggerRocketExplosion(b, effectsManager, paddleList = [], onDamagePaddle = null, directHitPaddle = null) {
+    if (!b) return;
+    const { COLORS } = GAME_CONFIG;
+    const baseDamage = typeof b.damage === 'number' ? b.damage : 12;
+    const innerR = 14;
+    const outerR = 130;
+    if (onDamagePaddle && Array.isArray(paddleList)) {
+      for (const p of paddleList) {
+        if (!p || p.hp <= 0 || p.invincibleTimer > 0) continue;
+        if (directHitPaddle && p === directHitPaddle) {
+          onDamagePaddle(p, baseDamage, { bulletId: b.id });
+          continue;
+        }
+        const nearestX = ColorUtils.clamp(b.x, p.x - p.currentWidth / 2, p.x + p.currentWidth / 2);
+        const nearestY = ColorUtils.clamp(b.y, p.y - p.height / 2, p.y + p.height / 2);
+        const dist = Math.hypot(b.x - nearestX, b.y - nearestY);
+        if (dist <= outerR) {
+          const scale = dist <= innerR ? 1 : ColorUtils.clamp(1 - (dist - innerR) / (outerR - innerR), 0, 1);
+          const dmg = Math.round(baseDamage * scale);
+          if (dmg > 0) {
+            onDamagePaddle(p, dmg, { bulletId: b.id });
+          }
+        }
+      }
+    }
+    if (effectsManager) {
+      effectsManager.spawnPulse({
+        kind: 'circle',
+        subType: 'bomb',
+        x: b.x,
+        y: b.y,
+        radius: 10,
+        color: COLORS.white,
+        duration: 0.36,
+        maxScale: outerR / 10
+      });
+      effectsManager.spawnCircleParticles(b.x, b.y, COLORS.red, 8, 35, 135);
     }
   }
 
@@ -549,6 +658,16 @@ class Enemy {
           this.fireTimer = this.fire_rate;
           this._checkAndApplyLaserDamage(paddleList, effectsManager, onDamagePaddle);
         }
+      }
+    } else if (
+      !this.hiddenByCloud &&
+      (this.bullet_type === 'quick' || this.bullet_type === 'aimed_spread') &&
+      this.y >= this.currentRadius
+    ) {
+      // comet (aimed_spread): 5秒おきのクールダウンでミニボス行動 (aimed_spread を3回撃つ、爆発なし)
+      const spawnedQuick = this._stepCometMiniBoss(dt, paddleList, enemyBullets);
+      if (spawnedQuick.length > 0 && netHooks && netHooks.onBulletsSpawned) {
+        netHooks.onBulletsSpawned(spawnedQuick, this);
       }
     } else if (
       // 通常射撃タイプの敵は画面内に入り、かつ雲に隠れていない時に射撃間隔 (fire_rate) に従って弾を発射
@@ -769,6 +888,80 @@ class Enemy {
     if (this.movement_type === 'fall') {
       // 右回転しながらゆっくり降下（speed倍率に応じて右回転速度もスケーリング）
       this.rotation += 1.4 * (this.speedMultiplier || 1) * dt;
+    } else if (this.movement_type === 'straight') {
+      // fallと同じだが自然に回転しない（hourglassの射撃時180度右回転アニメのみ進行）
+      if (this.hourglassFlipTimer > 0) {
+        this.hourglassFlipTimer = Math.max(0, this.hourglassFlipTimer - dt);
+        const u = 1 - this.hourglassFlipTimer / Math.max(0.01, this.hourglassFlipDuration);
+        const ease = 1 - Math.pow(1 - u, 3);
+        this.rotation = this.hourglassStartRot + (this.hourglassTargetRot - this.hourglassStartRot) * ease;
+      } else {
+        this.rotation = this.hourglassTargetRot;
+      }
+    } else if (this.movement_type === 'random_retro') {
+      // retroだが、画面の端ではなくランダムな位置で折り返す
+      const minX = this.currentRadius;
+      const maxX = WIDTH - this.currentRadius;
+      const pickNextRandomTarget = (goingRight) => {
+        const minTurnSpan = 48;
+        if (goingRight) {
+          const lo = Math.min(maxX, this.x + minTurnSpan);
+          return lo + this.rng.next() * Math.max(0, maxX - lo);
+        }
+        const hi = Math.max(minX, this.x - minTurnSpan);
+        return minX + this.rng.next() * Math.max(0, hi - minX);
+      };
+      if (this.randomRetroTargetX === null || this.randomRetroTargetX === undefined) {
+        this.randomRetroTargetX = pickNextRandomTarget(this.vx >= 0);
+      }
+      this.x += this.vx * dt;
+      if (this.vx < 0 && (this.x <= this.randomRetroTargetX || this.x <= minX)) {
+        this.x = Math.max(minX, this.randomRetroTargetX);
+        this.vx = Math.abs(this.vx);
+        this.randomRetroTargetX = pickNextRandomTarget(true);
+      } else if (this.vx > 0 && (this.x >= this.randomRetroTargetX || this.x >= maxX)) {
+        this.x = Math.min(maxX, this.randomRetroTargetX);
+        this.vx = -Math.abs(this.vx);
+        this.randomRetroTargetX = pickNextRandomTarget(false);
+      }
+    } else if (this.movement_type === 'squid') {
+      // ゲッソー型移動: ある程度下へ自然落下するとランダムな斜め上へ移動し、しきい値が徐々に下がっていく
+      const minX = this.currentRadius + 8;
+      const maxX = WIDTH - this.currentRadius - 8;
+      if (this.squidState === 'jet') {
+        // 基本の this.y += this.vy * dt を打ち消しつつ斜め上へ推進
+        this.y -= this.vy * dt;
+        this.squidJetTimer = Math.max(0, this.squidJetTimer - dt);
+        const factor = 0.25 + 0.75 * (this.squidJetTimer / Math.max(0.01, this.squidJetDuration));
+        this.x += this.squidJetVx * factor * dt;
+        this.y += this.squidJetVy * factor * dt;
+        if (this.x <= minX) {
+          this.x = minX;
+          this.squidJetVx = Math.abs(this.squidJetVx);
+        } else if (this.x >= maxX) {
+          this.x = maxX;
+          this.squidJetVx = -Math.abs(this.squidJetVx);
+        }
+        this.rotation = (this.squidJetVx * factor) * 0.0022;
+        if (this.squidJetTimer <= 0) {
+          this.squidState = 'fall';
+          this.rotation = 0;
+        }
+      } else {
+        // 自然落下フェーズ (通常より少しはっきり落下してしきい値へ到達)
+        this.y += this.vy * 1.15 * dt;
+        this.rotation *= Math.max(0, 1 - dt * 8);
+        if (this.y >= this.squidThresholdY && this.y < GAME_CONFIG.PADDLE.Y - 90) {
+          this.squidState = 'jet';
+          this.squidJetTimer = this.squidJetDuration;
+          let dir = this.rng.next() < 0.5 ? -1 : 1;
+          if (this.x - minX < 75) dir = 1;
+          else if (maxX - this.x < 75) dir = -1;
+          this.squidJetVx = dir * (135 + this.rng.next() * 45);
+          this.squidJetVy = -(140 + this.rng.next() * 35);
+          this.squidThresholdY += 52;
+        }
+      }
     } else if (this.movement_type === 'retro') {
       // 画面端まで左右にゆっくり往復移動（折り返し時の段差移動なし）
       this.x += this.vx * dt;
@@ -1063,10 +1256,192 @@ class Enemy {
     return spawned;
   }
 
+  triggerHourglassFlip() {
+    this.hourglassStartRot = this.hourglassTargetRot;
+    this.hourglassTargetRot += Math.PI; // 180度右回転
+    this.hourglassFlipTimer = this.hourglassFlipDuration;
+  }
+
+  _fireQuickAimedBullet(paddleList, enemyBullets) {
+    // 通常aimed(230)の2倍速(460)で残像を残しながら進む
+    const b = this._fireAimedBullet(paddleList, enemyBullets, false, 460, 'quick');
+    if (b) {
+      b.hasTrail = true;
+      b.trail = [{ x: b.x, y: b.y }];
+    }
+    return b;
+  }
+
+  _fireQuickAimedSpreadVolley(paddleList, enemyBullets) {
+    // spreadに似ているがプレイヤーを狙って撃ち、通常spread(190)の1.25倍速(237.5)で残像を残す
+    const { PADDLE } = GAME_CONFIG;
+    const alivePaddles = Array.isArray(paddleList) ? paddleList.filter((p) => p && p.hp > 0) : [];
+    const spawnY = this.y + this.currentRadius * 0.8;
+    let baseAngle = Math.PI / 2;
+    if (alivePaddles.length > 0) {
+      let best = alivePaddles[0];
+      let bestDist = Math.abs(best.x - this.x);
+      for (let i = 1; i < alivePaddles.length; i++) {
+        const d = Math.abs(alivePaddles[i].x - this.x);
+        if (d < bestDist) {
+          bestDist = d;
+          best = alivePaddles[i];
+        }
+      }
+      const dx = best.x - this.x;
+      const dy = (best.y !== undefined ? best.y : PADDLE.Y) - spawnY;
+      if (Enemy.isAimAngleValid(dx, dy)) {
+        baseAngle = Math.atan2(dy, dx);
+      }
+    }
+    const speed = 190 * 1.25; // 237.5
+    const offsets = [-0.26, 0, 0.26];
+    const spawned = [];
+    for (const off of offsets) {
+      const a = baseAngle + off;
+      const b = {
+        x: this.x,
+        y: spawnY,
+        vx: Math.cos(a) * speed,
+        vy: Math.sin(a) * speed,
+        angle: a,
+        speed,
+        damage: this.damage,
+        timer: 0,
+        shape: 'quick',
+        hasTrail: true,
+        trail: [{ x: this.x, y: spawnY }]
+      };
+      enemyBullets.push(b);
+      spawned.push(b);
+    }
+    return spawned;
+  }
+
+  _stepCometMiniBoss(dt, paddleList, enemyBullets) {
+    const spawned = [];
+    const fr = this.fire_rate > 0 ? this.fire_rate : 0.5;
+    if (this.cometPhase === 'cooldown') {
+      this.cometTimer -= dt;
+      if (this.cometTimer <= 0) {
+        this.cometPhase = 'aimed_spread_3';
+        this.cometShotsLeft = 3;
+        this.cometShotTimer = 0;
+      }
+    }
+
+    if (this.cometPhase === 'aimed_spread_3') {
+      this.cometShotTimer -= dt;
+      while (this.cometShotsLeft > 0 && this.cometShotTimer <= 0) {
+        const volley = this._fireQuickAimedSpreadVolley(paddleList, enemyBullets);
+        for (const b of volley) spawned.push(b);
+        this.cometShotsLeft -= 1;
+        this.cometShotTimer += fr * 2;
+      }
+      if (this.cometShotsLeft <= 0) {
+        this.cometPhase = 'cooldown';
+        this.cometTimer = 5.0;
+      }
+    }
+    return spawned;
+  }
+
+  _fireRocketBullet(paddleList, enemyBullets) {
+    // crescentと同じでプレイヤーの位置を予測し、0.75倍の速度(217.5)で残像を残しながらEaseInQuadの曲線軌道を描く
+    const { WIDTH, PADDLE } = GAME_CONFIG;
+    const speed = 290 * 0.75; // 217.5
+    const spawnY = this.y + this.currentRadius * 0.85;
+    const dy = PADDLE.Y - spawnY;
+    // パドルとほぼ同じ高さ・または下まで降りている場合は横撃ち防止のため発射しない
+    if (dy <= 80) return null;
+
+    const alivePaddles = Array.isArray(paddleList) ? paddleList.filter((p) => p && p.hp > 0) : [];
+    if (alivePaddles.length === 0) return null;
+
+    let best = alivePaddles[0];
+    let bestDist = Math.abs(best.x - this.x);
+    for (let i = 1; i < alivePaddles.length; i++) {
+      const d = Math.abs(alivePaddles[i].x - this.x);
+      if (d < bestDist) {
+        bestDist = d;
+        best = alivePaddles[i];
+      }
+    }
+    const halfW = (best.currentWidth || 100) * 0.5;
+    const pv = best.vx || 0;
+    const t1 = Math.hypot(best.x - this.x, dy) / speed;
+    const px1 = ColorUtils.clamp(best.x + pv * t1, halfW, WIDTH - halfW);
+    const t2 = Math.hypot(px1 - this.x, dy) / speed;
+    let targetX = ColorUtils.clamp(best.x + pv * t2, halfW, WIDTH - halfW);
+
+    if (Math.abs(targetX - this.x) < 28) {
+      const sign = this.x < WIDTH * 0.5 ? 1 : -1;
+      targetX = ColorUtils.clamp(this.x + sign * 36, 40, WIDTH - 40);
+    }
+
+    const dx = targetX - this.x;
+    // 横向きに近い射角（EaseInQuad終端の横傾きを含む）の場合は発射しない
+    if (!Enemy.isAimAngleValid(dx, dy, Math.PI / 3) || !Enemy.isAimAngleValid(dx * 2, dy, Math.PI * 0.38)) {
+      return null;
+    }
+
+    const dist = Math.hypot(dx, dy);
+    const dur = Math.max(0.35, dist / speed);
+    const b = {
+      x: this.x,
+      y: spawnY,
+      vx: 0,
+      vy: dy / dur,
+      angle: Math.PI / 2,
+      speed,
+      damage: this.damage,
+      timer: 0,
+      shape: 'rocket',
+      motionMode: 'rocket',
+      rocketStartX: this.x,
+      rocketStartY: spawnY,
+      rocketTargetX: targetX,
+      rocketTargetY: PADDLE.Y,
+      rocketDur: dur,
+      rocketElapsed: 0,
+      hasTrail: true,
+      trail: [{ x: this.x, y: spawnY }]
+    };
+    enemyBullets.push(b);
+    return b;
+  }
+
+  _fireWavesBullet(paddleList, enemyBullets) {
+    // 弾を撃つたびに身体を180度右回転させ、通常(205)の2倍の速度(410)で残像を残す電波弾を撃つ
+    this.triggerHourglassFlip();
+    const speed = 205 * 2; // 410
+    let b = this._fireAimedBullet(paddleList, enemyBullets, false, speed, 'waves');
+    if (!b) {
+      const spawnY = this.y + this.currentRadius * 0.85;
+      b = {
+        x: this.x,
+        y: spawnY,
+        vx: 0,
+        vy: speed,
+        angle: Math.PI / 2,
+        speed,
+        damage: 0,
+        timer: 0,
+        shape: 'waves'
+      };
+      enemyBullets.push(b);
+    }
+    b.damage = 0;
+    b.hasTrail = true;
+    b.trail = [{ x: b.x, y: b.y }];
+    return b;
+  }
+
   triggerSelfExplosion(effectsManager, paddleList = [], onDamagePaddle = null, netHooks = null) {
     const { COLORS } = GAME_CONFIG;
     const innerR = this.currentRadius * 0.7;
     const outerR = 260;
+    const baseExpDamage = this.name === 'comet' ? 8 : this.damage;
     if (onDamagePaddle && Array.isArray(paddleList)) {
       for (const p of paddleList) {
         if (!p || p.hp <= 0 || p.invincibleTimer > 0) continue;
@@ -1075,7 +1450,7 @@ class Enemy {
         const dist = Math.hypot(this.x - nearestX, this.y - nearestY);
         if (dist <= outerR) {
           const scale = dist <= innerR ? 1 : ColorUtils.clamp(1 - (dist - innerR) / (outerR - innerR), 0, 1);
-          const dmg = Math.round(this.damage * scale);
+          const dmg = Math.round(baseExpDamage * scale);
           if (dmg > 0) {
             onDamagePaddle(p, dmg);
           }
@@ -1194,7 +1569,7 @@ class Enemy {
     } else if (this.bullet_type === 'aimed' || this.bullet_type === 'slice') {
       const b = this._fireAimedBullet(paddleList, enemyBullets, false, 230);
       if (b) spawned.push(b);
-    } else if (this.bullet_type === 'counter') {
+    } else if (this.bullet_type === 'counter' || this.bullet_type === 'defend_counter') {
       const useAimed = this._counterUseAimed;
       this._counterUseAimed = !this._counterUseAimed;
       const b = useAimed
@@ -1204,6 +1579,15 @@ class Enemy {
     } else if (this.bullet_type === 'crescent') {
       const b = this._fireAimedBullet(paddleList, enemyBullets, true, 290, 'crescent');
       if (b) spawned.push(b);
+    } else if (this.bullet_type === 'quick' || this.bullet_type === 'aimed_spread') {
+      const volley = this._fireQuickAimedSpreadVolley(paddleList, enemyBullets);
+      for (const b of volley) spawned.push(b);
+    } else if (this.bullet_type === 'rocket') {
+      const b = this._fireRocketBullet(paddleList, enemyBullets);
+      if (b) spawned.push(b);
+    } else if (this.bullet_type === 'waves') {
+      const b = this._fireWavesBullet(paddleList, enemyBullets);
+      if (b) spawned.push(b);
     }
     return spawned;
   }
@@ -1211,7 +1595,48 @@ class Enemy {
   hitByBall(ball, effectsManager, forceInstantKill = false, enemyBullets = null) {
     const { COLORS, ENEMY, WIDTH } = GAME_CONFIG;
     const visualScale = (ENEMY && ENEMY.VISUAL_SCALE) || 1.5;
-    const isCyanBall = ball && ball.effects && ball.effects.cyan > 0;
+    this._lastHitBlockedByFrontShield = false;
+    const isCyanBall = Boolean(ball && ball.effects && ball.effects.cyan > 0);
+    const isSwingHit = Boolean(forceInstantKill || (ball && ball.isSwing));
+
+    // aegis (defend_counter): 下側の直線シールド正面（真下±45度以内: dy > 0 && dy > |dx|）からきた通常ボールではダメージを受けず、カウンター攻撃のみ行う
+    // 横（|dx| >= dy）および背後（dy <= 0）からのヒット時はダメージを受け、カウンターはしない
+    // 水色星の効果中 (isCyanBall) または swing スキル (isSwingHit) は正面からでもダメージを与える（カウンター攻撃は発動する）
+    if (this.bullet_type === 'defend_counter' && ball) {
+      const hasBallPos = typeof ball.x === 'number' && typeof ball.y === 'number';
+      let isFrontHit = false;
+      if (hasBallPos) {
+        const dx = ball.x - this.x;
+        const dy = ball.y - this.y;
+        isFrontHit = dy > 0 && dy > Math.abs(dx);
+      } else if (typeof ball.y === 'number') {
+        isFrontHit = ball.y > this.y;
+      } else if (typeof ball.vy === 'number') {
+        isFrontHit = ball.vy < 0 && Math.abs(ball.vy) > Math.abs(ball.vx || 0);
+      }
+      if (isFrontHit) {
+        this._spawnCounterRadialBullets(6, enemyBullets);
+        if (!isCyanBall && !isSwingHit) {
+          this._lastHitBlockedByFrontShield = true;
+          if (effectsManager) {
+            effectsManager.spawnPulse({
+              kind: 'enemy',
+              target: this,
+              subType: this.name,
+              x: this.x,
+              y: this.y,
+              radius: this.currentRadius * visualScale,
+              angle: this.rotation,
+              color: COLORS.white,
+              duration: 0.35,
+              maxScale: 1.75
+            });
+          }
+          return false;
+        }
+      }
+    }
+
     if (isCyanBall || forceInstantKill) {
       this.health = 0;
     } else {
@@ -1282,18 +1707,20 @@ class Enemy {
       return true;
     }
 
-    effectsManager.spawnPulse({
-      kind: 'enemy',
-      subType: this.name,
-      x: this.x,
-      y: this.y,
-      radius: this.currentRadius * visualScale,
-      angle: this.rotation,
-      color: isCyanBall ? COLORS.cyan : COLORS.white,
-      duration: 0.45,
-      maxScale: 2.4
-    });
-    effectsManager.spawnCircleParticles(this.x, this.y, COLORS.white, 10, 50, 180);
+    if (effectsManager) {
+      effectsManager.spawnPulse({
+        kind: 'enemy',
+        subType: this.name,
+        x: this.x,
+        y: this.y,
+        radius: this.currentRadius * visualScale,
+        angle: this.rotation,
+        color: isCyanBall ? COLORS.cyan : COLORS.white,
+        duration: 0.45,
+        maxScale: 2.4
+      });
+      effectsManager.spawnCircleParticles(this.x, this.y, COLORS.white, 10, 50, 180);
+    }
     return true; // 消滅
   }
 

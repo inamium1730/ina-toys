@@ -40,11 +40,13 @@ class Item {
     return ColorUtils.clamp(baseInterval / (interval * stageData.spawn_limit), 0, 1);
   }
 
-  static maybeSpawn(x, y, dropChance, items, purplePaddle, forcedType = null) {
+  static maybeSpawn(x, y, dropChance, items, purplePaddle, forcedType = null, currentLives = null) {
     if (GameRng.next() > dropChance) return null;
 
+    const isLivesMax = typeof currentLives === 'number' && currentLives >= 3;
     if (forcedType) {
-      return new Item(x, y, forcedType, Item.getColorForType(forcedType));
+      const resolvedForced = (forcedType === 'blue_circle' && isLivesMax) ? 'blue_star' : forcedType;
+      return new Item(x, y, resolvedForced, Item.getColorForType(resolvedForced));
     }
 
     const { PURPLE_PADDLE } = GAME_CONFIG;
@@ -76,7 +78,8 @@ class Item {
       r -= entry.weight;
     }
 
-    return new Item(x, y, chosen.type, Item.getColorForType(chosen.type));
+    const finalType = (chosen.type === 'blue_circle' && isLivesMax) ? 'blue_star' : chosen.type;
+    return new Item(x, y, finalType, Item.getColorForType(finalType));
   }
 
   update(dt, paddles, effectsManager, onCollect) {
