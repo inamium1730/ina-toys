@@ -80,7 +80,7 @@
 
   const DAMAGE_SHAKE_DURATION = 0.11;
   const CRACK_SHAKE_DURATION = 0.14;
-  const CHRONO_TARGET_SCALE = 0.5;
+  const CHRONO_TARGET_SCALE = 0.25;
   const CHRONO_ENTER_DURATION = 0.5;
   const CHRONO_EXIT_DURATION = 1.0;
   const NICKNAME_STORAGE_KEY = 'paddles_nickname';
@@ -2061,7 +2061,19 @@
     }
   }
 
+  function endChronoEffectEarly() {
+    const sk = game.skills && game.skills.chrono;
+    if (sk && sk.activeTimer > 0) {
+      sk.activeTimer = 0;
+      if (game.chronoRecoveryTimer <= 0) {
+        game.chronoRecoveryTimer = CHRONO_EXIT_DURATION;
+      }
+      renderSkillBarUI();
+    }
+  }
+
   function startNextStageTransition() {
+    endChronoEffectEarly();
     for (const p of game.paddles) {
       p.respawnPenalty = 0;
     }
@@ -4178,6 +4190,7 @@
       updateStageTransition(dt);
     } else if (isBossStage(stageData)) {
       if (game.boss && game.boss.isDefeated()) {
+        endChronoEffectEarly();
         while (game.enemies.length > 0) {
           const enemy = game.enemies.pop();
           forceDestroyEnemy(enemy);
@@ -4208,6 +4221,7 @@
         if (game.stageIndex + 1 < MAPS.length) {
           startNextStageTransition();
         } else {
+          endChronoEffectEarly();
           endGame('victory');
         }
       }
@@ -4450,15 +4464,15 @@
     // 6. パドル被弾時の赤ゲージ残像＆三角形破砕演出
     effectsManager.renderDamageEffects(ctx);
 
-    // 7. 自機＆味方パドル
+    // 7. 紫色のサブパドル（自機パドル・状態アイコンより背面に描画）
+    if (game.purplePaddle) {
+      game.purplePaddle.render(ctx);
+    }
+
+    // 8. 自機＆味方パドル（状態アイコンを含む）
     const showMultiTags = game.paddles.length > 1;
     for (const p of game.paddles) {
       p.render(ctx, showMultiTags, game.tagTransition);
-    }
-
-    // 8. 紫色のサブパドル
-    if (game.purplePaddle) {
-      game.purplePaddle.render(ctx);
     }
 
     // 9. ボール＆残像
